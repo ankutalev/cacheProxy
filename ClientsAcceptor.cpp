@@ -1,8 +1,9 @@
 #include <iostream>
 #include <unistd.h>
+#include <cstdio>
+#include <stdexcept>
 #include "picohttpparser/picohttpparser.h"
 #include "ClientsAcceptor.h"
-#include <cstdio>
 
 ClientsAcceptor::ClientsAcceptor() {
     port = DEFAULT_PORT;
