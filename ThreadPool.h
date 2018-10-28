@@ -18,7 +18,7 @@ public:
 private:
     static const int DEFAULT_THREADS = 10;
     std::vector<pthread_t> threads;
-    WorkerData* workerData = nullptr;
+    WorkerData *workerData;
 };
 
 

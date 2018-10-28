@@ -1,19 +1,23 @@
-#include <stdexcept>
-#include "ThreadPool.h"
 #include <iostream>
-
+#include "ThreadPool.h"
 struct WorkerData {
-     WorkerData() : mutex(PTHREAD_MUTEX_INITIALIZER),condVar(PTHREAD_COND_INITIALIZER) {}
+    WorkerData() {
+        pthread_mutex_init(&mutex, NULL);
+        pthread_cond_init(&condVar, NULL);
+    }
     ~WorkerData() {
         pthread_mutex_destroy(&mutex);
         pthread_cond_destroy(&condVar);
     }
-    std::queue<std::pair<Job,void*>> jobs;
+
+    std::queue<std::pair<Job, void *> > jobs;
     pthread_mutex_t mutex;
     pthread_cond_t condVar;
 };
 
-ThreadPool::ThreadPool() : ThreadPool(DEFAULT_THREADS) {}
+ThreadPool::ThreadPool() : threads(DEFAULT_THREADS), workerData(new WorkerData) {
+
+}
 
 ThreadPool::ThreadPool(int workers) : threads(workers), workerData(new WorkerData)  {}
 
@@ -29,8 +33,8 @@ void ThreadPool::addJob(Job job, void *jobArgs) {
 }
 
 void ThreadPool::stopAll() {
-    for (unsigned long thread : threads) {
-        pthread_cancel(thread);
+    for (int i = 0; i < threads.size(); ++i) {
+        pthread_cancel(threads[i]);
     }
 }
 
@@ -50,30 +54,24 @@ void ThreadPool::stopAll() {
 
 
 static void* workerBody(void* workerData) {
-    auto wData = (WorkerData*) workerData;
+    WorkerData *wData = (WorkerData *) workerData;
     while (true) {
         pthread_mutex_lock(&wData->mutex);
         while (wData->jobs.empty())
             pthread_cond_wait(&wData->condVar, &wData->mutex);
-        auto job = wData->jobs.front(); // first - func,second - args
+        std::pair<Job, void *> job = wData->jobs.front(); // first - func,second - args
         wData->jobs.pop();
         pthread_mutex_unlock(&wData->mutex);
         job.first(job.second);
     }
-    return nullptr;
+    return NULL;
 }
 
 
 void ThreadPool::startAll() {
-    for (unsigned long &thread : threads) {
-//        auto err = pthread_create(&thread, nullptr, &ThreadPool::workerBody, (void*)workerIndex);
-        auto err = pthread_create(&thread, nullptr, workerBody, workerData);
+    for (int i = 0; i < threads.size(); ++i) {
+        int err = pthread_create(&threads[i], NULL, workerBody, workerData);
         if (err)
             throw std::runtime_error("Can't create threads!");
     }
-//    for (unsigned long thread : threads) {
-//                auto err = pthread_detach(thread);
-//        if (err)
-//            throw std::runtime_error("Can't detach threads!");
-//    }
 }

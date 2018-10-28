@@ -9,6 +9,8 @@
 class ClientsAcceptor {
 public:
     ClientsAcceptor();
+
+    ~ClientsAcceptor();
     explicit ClientsAcceptor(int port);
     bool listenAndRegister();
 private:
@@ -16,7 +18,7 @@ private:
     int serverSocket;
     int clientSocket;
     struct sockaddr_in serverAddr,clientAddr;
-    int CLIENT_SOCKET_SIZE = sizeof(clientAddr);
+    int CLIENT_SOCKET_SIZE;
     const static int BUFFER_LENGTH = 100;
     const static int MAXIMIUM_CLIENTS = 1024;
     const static int DEFAULT_PORT = 52849;
