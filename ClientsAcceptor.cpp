@@ -118,7 +118,7 @@ bool ClientsAcceptor::listenAndRegister() {
         clients.push_back(c);
         ThreadRegisterInfo info(&clients.back(), &connections);
         poll(clients.data(), clients.size(), 1000);
-        for (auto it = clients.begin(); it != clients.end();) {
+        for (std::vector<pollfd>::iterator it = clients.begin(); it != clients.end();) {
             if (it->revents == POLLIN) {
                 pool.addJob(registerConnection, &info);
             } else if (it->revents == POLLOUT) {
