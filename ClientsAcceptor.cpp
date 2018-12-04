@@ -13,7 +13,6 @@ static void *writeToBrowser(void *params) {
     std::cerr << "ALLO!!!";
     write(info->fd, "sosi jopu", 9);
     close(info->fd);
-    info->revents = POLLMSG;
     return NULL;
 }
 
