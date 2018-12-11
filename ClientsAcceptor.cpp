@@ -61,6 +61,7 @@ static void* readData(void* arg) {
 //        buff[readed] = 0;
 //        if (!readed) {
 //            registerDescryptorForPollWrite(to);
+//            registerDescryptorForPollWrite(to);
 //            brokenDescryptors.insert(idDesc);
 //            return;
 //        }
@@ -182,7 +183,7 @@ static void* sendData(void* args) {
     ssize_t size = (*requiredInfo->dataPieces)[requiredInfo->target].size();
 
     do {
-        sended = send(requiredInfo->target->fd, (*requiredInfo->dataPieces)[requiredInfo->target].data(),
+        sended = send(requiredInfo->target->fd, &(*requiredInfo->dataPieces)[requiredInfo->target][0],
                       (*requiredInfo->dataPieces)[requiredInfo->target].size(), 0);
         (*requiredInfo->dataPieces)[requiredInfo->target].erase(
                 (*requiredInfo->dataPieces)[requiredInfo->target].begin(),
@@ -275,7 +276,7 @@ void ClientsAcceptor::pollManage() {
     pollfd c;
     c.fd = -1;
     c.events = POLLIN;
-    poll(pollDescryptors->data(), pollDescryptors->size(), POLL_DELAY);
+    poll(&(*pollDescryptors)[0], pollDescryptors->size(), POLL_DELAY);
 
     unsigned long oldPollSize = pollDescryptors->size();
     for (int j = 0; j < pollDescryptors->size(); ++j) {
