@@ -21,8 +21,11 @@ struct ThreadRegisterInfo {
 struct TargetConnectInfo {
     TargetConnectInfo(int* s, pollfd* cl, pollfd* tg, std::map<pollfd*, std::vector<char> >* dp,
                       std::map<pollfd*, pollfd*>* tm,
-                      std::set<pollfd*>* bd) : server(s), client(cl), target(tg), dataPieces(dp), transferMap(tm),
-                                               brokenDescryptors(bd) {}
+                      std::set<pollfd*>* bd,
+                      std::map<pollfd*, std::string>* ss) : server(s), client(cl), target(tg), dataPieces(dp),
+                                                            transferMap(tm),
+                                                            brokenDescryptors(bd),
+                                                            hostToGets(ss) {}
 
     int* server;
     pollfd* client;
@@ -30,6 +33,18 @@ struct TargetConnectInfo {
     std::map<pollfd*, std::vector<char> >* dataPieces;
     std::map<pollfd*, pollfd*>* transferMap;
     std::set<pollfd*>* brokenDescryptors;
+    std::map<pollfd*, std::string>* hostToGets;
+};
+
+struct SendDataInfo {
+    SendDataInfo(pollfd* tg, std::map<pollfd*, std::vector<char> >* dp, std::vector<pollfd>* pd)
+            : target(tg),
+              dataPieces(dp),
+              pollDescryptors(pd) {}
+
+    pollfd* target;
+    std::map<pollfd*, std::vector<char> >* dataPieces;
+    std::vector<pollfd>* pollDescryptors;
 };
 
 class ClientsAcceptor {
@@ -45,6 +60,8 @@ public:
 private:
     void pollManage();
 
+    void removeFromPoll();
+
 private:
     int i;
     int port;
@@ -57,10 +74,15 @@ private:
     const static int DEFAULT_PORT = 8080;
     const static int POLL_DELAY = 3000;
     ThreadPool pool;
+
+    std::map<std::string, std::vector<char> > cashe;
+    std::map<std::string, CasheState> isCacheConsistent;
     std::vector<pollfd>* pollDescryptors;
     std::map<pollfd*, pollfd*>* transferMap;
+    std::map<pollfd*, std::string> hostsToGets;
     std::map<pollfd*, std::vector<char> >* dataPieces;
     std::set<pollfd*> brokenDescryptors;
+    std::set<pollfd*> servers;
 };
 
 

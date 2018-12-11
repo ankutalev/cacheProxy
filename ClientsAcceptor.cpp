@@ -10,7 +10,7 @@
 #include "ClientsAcceptor.h"
 
 
-bool httpParse(const std::string &req, ConnectionInfo* info) {
+bool httpParseRequest(const std::string &req, ConnectionInfo* info) {
     const char* path;
     const char* method;
     int pret, minor_version;
@@ -64,9 +64,18 @@ static void* targetConnect(void* arg) {
     std::cout << "i read " << request << std::endl;
     ConnectionInfo targetInfo;
 
-    if (!httpParse(request, &targetInfo)) {
+    if (!httpParseRequest(request, &targetInfo)) {
         std::cout << "Invalid http request received!\n";
         requiredInfo->brokenDescryptors->insert(requiredInfo->client);
+        return NULL;
+    }
+
+    if (targetInfo.method != "GET") {
+        std::string notSupporting = "HTTP 405\r\nAllow: GET\r\n";
+        send(requiredInfo->client->fd, notSupporting.c_str(), notSupporting.size(), 0);
+        close(requiredInfo->client->fd);
+        requiredInfo->client->fd = -requiredInfo->client->fd;
+        std::cerr << "NAPISAL!";
         return NULL;
     }
 
@@ -83,6 +92,14 @@ static void* targetConnect(void* arg) {
     addrinfo* addr = NULL;
     getaddrinfo(targetInfo.host.c_str(), NULL, &hints, &addr);
     sockaddr_in targetAddr;
+
+    if (!addr) {
+        std::cerr << "Can't resolve host! Terminating" << std::endl;
+        requiredInfo->brokenDescryptors->insert(requiredInfo->client);
+        requiredInfo->brokenDescryptors->insert(requiredInfo->target);
+        return NULL;
+    }
+
     targetAddr = *(sockaddr_in*) (addr->ai_addr);
     targetAddr.sin_family = AF_INET;
     targetAddr.sin_port = htons(80);
@@ -110,10 +127,9 @@ static void* targetConnect(void* arg) {
     requiredInfo->target->fd = targetSocket;
     (*requiredInfo->transferMap)[requiredInfo->client] = (*requiredInfo->transferMap)[requiredInfo->target];
     (*requiredInfo->transferMap)[requiredInfo->target] = (*requiredInfo->transferMap)[requiredInfo->client];
-
+    (*requiredInfo->hostToGets)[requiredInfo->target] = targetInfo.path;
     return NULL;
 }
-
 
 static void* acceptConnection(void* args) {
     ThreadRegisterInfo* descs = (ThreadRegisterInfo*) args;
@@ -131,6 +147,30 @@ static void* acceptConnection(void* args) {
     return NULL;
 }
 
+static void* sendData(void* args) {
+
+    SendDataInfo* requiredInfo = (SendDataInfo*) args;
+    ssize_t sended = 0;
+    ssize_t size = (*requiredInfo->dataPieces)[requiredInfo->target].size();
+
+    do {
+        sended = send(requiredInfo->target->fd, (*requiredInfo->dataPieces)[requiredInfo->target].data(),
+                      (*requiredInfo->dataPieces)[requiredInfo->target].size(), 0);
+        (*requiredInfo->dataPieces)[requiredInfo->target].erase(
+                (*requiredInfo->dataPieces)[requiredInfo->target].begin(),
+                (*requiredInfo->dataPieces)[requiredInfo->target].begin() + sended);
+    } while (sended > 0);
+    requiredInfo->dataPieces->erase(requiredInfo->target);
+    for (std::vector<pollfd>::iterator it = requiredInfo->pollDescryptors->begin();
+         it != requiredInfo->pollDescryptors->end();) {
+        if (&*it == requiredInfo->target) {
+            (&*it)->events ^= POLLOUT;
+            return NULL;
+        } else ++it;
+    }
+
+    return NULL;
+}
 
 ClientsAcceptor::ClientsAcceptor() : pool(1) {
     port = DEFAULT_PORT;
@@ -203,6 +243,7 @@ bool ClientsAcceptor::listenAndRegister() {
         pollManage();
 }
 
+
 void ClientsAcceptor::pollManage() {
     pollfd c;
     c.fd = -1;
@@ -212,7 +253,11 @@ void ClientsAcceptor::pollManage() {
     poll(pollDescryptors->data(), pollDescryptors->size(), POLL_DELAY);
 
     unsigned long oldPollSize = pollDescryptors->size();
-    unsigned long descryptorsWithNoTarget = (pollDescryptors->size() - 1) - transferMap->size();
+    for (int j = 0; j < pollDescryptors->size(); ++j) {
+        if (pollDescryptors->at(j).fd < 0)
+            oldPollSize--;
+    }
+    unsigned long descryptorsWithNoTarget = (oldPollSize) - transferMap->size();
 
     for (unsigned long i = 0; i < descryptorsWithNoTarget; ++i) {
         pollfd target;
@@ -224,30 +269,37 @@ void ClientsAcceptor::pollManage() {
     std::vector<pollfd>::iterator noTargetsIterator = pollDescryptors->begin() + oldPollSize;
 
     for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
-        if (it->fd != serverSocket and !transferMap->count(&*it)) {
+        if (it->fd > 0 and it->revents & POLLIN and it->fd != serverSocket and !transferMap->count(&*it)) {
             TargetConnectInfo tgc(&serverSocket, &*it, &*noTargetsIterator, dataPieces, transferMap,
-                                  &brokenDescryptors);
+                                  &brokenDescryptors, &hostsToGets);
             targetConnect(&tgc);
             ++noTargetsIterator;
         } else if (it->revents & POLLIN) {
             if (it->fd == serverSocket) {
                 ThreadRegisterInfo info(&serverSocket, &c);
-//                pool.addJob(acceptConnection,&info);
                 acceptConnection(&info);
             } else {
-//                readData(&*it);
+//                readData(&*it)
             }
+        } else if (it->revents & POLLOUT) {
+            SendDataInfo sdi(&*it, dataPieces, pollDescryptors);
+            if (servers.count(&*it)) {
+                sendData(&sdi);
+                std::cout << "vislal na server!";
+            } else {
+                std::cout << "v keshe poishi!";
+            }
+            std::cout << "WOW";
         }
     }
 
     removeFromPoll();
-    if (pollDescryptors->size() > 10)
-        reBase();
 
+//    if (pollDescryptors->size() > 10)
+//
 
     if (c.fd != -1) {
         pollDescryptors->push_back(c);
-        std::cout << "PUSHBACKUL!\n";
     }
 
 }
@@ -257,5 +309,16 @@ ClientsAcceptor::~ClientsAcceptor() {
     close(serverSocket);
 }
 
+
+void ClientsAcceptor::removeFromPoll() {
+
+    for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end();) {
+        if (brokenDescryptors.count(&*it) and it->fd > 0) {
+            close(it->fd);
+            std::cout << "CLOSE this! " << it->fd << std::endl;
+            it->fd = -it->fd;
+        } else ++it;
+    }
+}
 
 
