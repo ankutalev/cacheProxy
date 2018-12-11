@@ -24,23 +24,24 @@ bool httpParse(const std::string &req, ConnectionInfo* info) {
     std::cout << "\n\n\nSTART OF INFORMATION\n\n\n";
     printf("request is %d bytes long\n", pret);
     info->method = method;
+    info->method.erase(info->method.begin() + method_len, info->method.end());
     info->path = path;
+    info->path.erase(info->path.begin() + path_len, info->path.end());
     for (int i = 0; i != num_headers; ++i) {
-        info->otherHeaders[headers[i].name] = headers[i].value;
-        if (!std::strcmp(headers[i].name, "Host"))
-            info->host = headers[i].value;
+        std::string headerName = headers[i].name;
+        headerName.erase(headerName.begin() + headers[i].name_len, headerName.end());
+        info->otherHeaders[headerName] = headers[i].value;
+        info->otherHeaders[headerName].erase(info->otherHeaders[headerName].begin() + headers[i].value_len,
+                                             info->otherHeaders[headerName].end());
+        if (headerName == "Host")
+            info->host = info->otherHeaders[headerName];
     }
     return true;
 }
 
 
-
-
-
-
-
-static void *writeToBrowser(void *params) {
-    pollfd *info = (pollfd *) params;
+static void* writeToBrowser(void* params) {
+    pollfd* info = (pollfd*) params;
     std::cerr << "ALLO!!!";
     write(info->fd, "sosi jopu", 9);
     close(info->fd);
@@ -49,23 +50,66 @@ static void *writeToBrowser(void *params) {
 
 
 static void* targetConnect(void* arg) {
-    pollfd* client = (pollfd*) arg;
+    TargetConnectInfo* requiredInfo = (TargetConnectInfo*) arg;
     const static int BUFFER_LENGTH = 1500;
     char buffer[BUFFER_LENGTH];
     std::fill(buffer, buffer + BUFFER_LENGTH, 0);
-    std::cout << "CONNECT TO TARGET FROM: " << client->fd << "\n";
+    std::cout << "CONNECT TO TARGET FROM: " << requiredInfo->client->fd << "\n";
     std::string request;
-    while (ssize_t read = recv(client->fd, buffer, BUFFER_LENGTH, 0)) {
+    while (ssize_t read = recv(requiredInfo->client->fd, buffer, BUFFER_LENGTH, 0)) {
         request += buffer;
         if (read != BUFFER_LENGTH)
             break;
     }
     std::cout << "i read " << request << std::endl;
     ConnectionInfo targetInfo;
+
     if (!httpParse(request, &targetInfo)) {
         std::cout << "Invalid http request received!\n";
+        requiredInfo->brokenDescryptors->insert(requiredInfo->client);
+        return NULL;
     }
 
+    for (int i = 0; i < request.size(); ++i) {
+        (*requiredInfo->dataPieces)[requiredInfo->target].push_back(request[i]);
+    }
+
+    addrinfo hints = {0};
+    hints.ai_flags = 0;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    addrinfo* addr = NULL;
+    getaddrinfo(targetInfo.host.c_str(), NULL, &hints, &addr);
+    sockaddr_in targetAddr;
+    targetAddr = *(sockaddr_in*) (addr->ai_addr);
+    targetAddr.sin_family = AF_INET;
+    targetAddr.sin_port = htons(80);
+
+    int targetSocket = socket(AF_INET, SOCK_STREAM, 0);
+    if (targetSocket == -1) {
+        std::cout << "Can't open target socket! Terminating" << std::endl;
+        requiredInfo->brokenDescryptors->insert(requiredInfo->client);
+        requiredInfo->brokenDescryptors->insert(requiredInfo->target);
+        return NULL;
+    }
+    if (connect(targetSocket, (sockaddr*) &targetAddr, sizeof(targetAddr))) {
+        std::cout << "Can't connect to target! Terminating!" << std::endl;
+        requiredInfo->brokenDescryptors->insert(requiredInfo->client);
+        requiredInfo->brokenDescryptors->insert(requiredInfo->target);
+        return NULL;
+    }
+    if (fcntl(targetSocket, F_SETFL, fcntl(targetSocket, F_GETFL, 0) | O_NONBLOCK) == -1) {
+        std::cout << "Can't make target socket non blocking! Terminating!" << std::endl;
+        requiredInfo->brokenDescryptors->insert(requiredInfo->client);
+        requiredInfo->brokenDescryptors->insert(requiredInfo->target);
+        return NULL;
+    }
+
+    requiredInfo->target->fd = targetSocket;
+    (*requiredInfo->transferMap)[requiredInfo->client] = (*requiredInfo->transferMap)[requiredInfo->target];
+    (*requiredInfo->transferMap)[requiredInfo->target] = (*requiredInfo->transferMap)[requiredInfo->client];
 
     return NULL;
 }
@@ -100,7 +144,6 @@ ClientsAcceptor::ClientsAcceptor() : pool(1) {
     dataPieces = new std::map<pollfd*, std::vector<char> >;
 
 
-
     int opt = 1;
     setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     if (serverSocket == -1)
@@ -110,7 +153,7 @@ ClientsAcceptor::ClientsAcceptor() : pool(1) {
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(port);
 
-    if (bind(serverSocket, (sockaddr *) &serverAddr, sizeof(serverAddr))) {
+    if (bind(serverSocket, (sockaddr*) &serverAddr, sizeof(serverAddr))) {
         throw std::runtime_error("Can't bind server socket!");
     }
 
@@ -140,7 +183,7 @@ ClientsAcceptor::ClientsAcceptor(int port) : port(port), pool(1) {
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(port);
 
-    if (bind(serverSocket, (sockaddr *) &serverAddr, sizeof(serverAddr)))
+    if (bind(serverSocket, (sockaddr*) &serverAddr, sizeof(serverAddr)))
         throw std::runtime_error("Can't bind server socket!");
 
 
@@ -155,7 +198,7 @@ void removeFromPoll() {}
 void reBase() {}
 
 bool ClientsAcceptor::listenAndRegister() {
-    pool.startAll();
+//    pool.startAll();
     while (1)
         pollManage();
 }
@@ -168,14 +211,24 @@ void ClientsAcceptor::pollManage() {
 
     poll(pollDescryptors->data(), pollDescryptors->size(), POLL_DELAY);
 
+    unsigned long oldPollSize = pollDescryptors->size();
     unsigned long descryptorsWithNoTarget = (pollDescryptors->size() - 1) - transferMap->size();
 
+    for (unsigned long i = 0; i < descryptorsWithNoTarget; ++i) {
+        pollfd target;
+        target.fd = -1;
+        target.events = POLLOUT;
+        pollDescryptors->push_back(target);
+    }
+
+    std::vector<pollfd>::iterator noTargetsIterator = pollDescryptors->begin() + oldPollSize;
 
     for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
-        if (it->fd != serverSocket and it->revents & POLLIN and !transferMap->count(&*it)) {
-//            sendData(&*it);
-            targetConnect(&*it);
-//            pool.addJob(targetConnect,&*it);
+        if (it->fd != serverSocket and !transferMap->count(&*it)) {
+            TargetConnectInfo tgc(&serverSocket, &*it, &*noTargetsIterator, dataPieces, transferMap,
+                                  &brokenDescryptors);
+            targetConnect(&tgc);
+            ++noTargetsIterator;
         } else if (it->revents & POLLIN) {
             if (it->fd == serverSocket) {
                 ThreadRegisterInfo info(&serverSocket, &c);

@@ -15,6 +15,21 @@ struct ThreadRegisterInfo {
 
     int* server;
     pollfd* client;
+    std::set<pollfd*>* brokenDescryptors;
+};
+
+struct TargetConnectInfo {
+    TargetConnectInfo(int* s, pollfd* cl, pollfd* tg, std::map<pollfd*, std::vector<char> >* dp,
+                      std::map<pollfd*, pollfd*>* tm,
+                      std::set<pollfd*>* bd) : server(s), client(cl), target(tg), dataPieces(dp), transferMap(tm),
+                                               brokenDescryptors(bd) {}
+
+    int* server;
+    pollfd* client;
+    pollfd* target;
+    std::map<pollfd*, std::vector<char> >* dataPieces;
+    std::map<pollfd*, pollfd*>* transferMap;
+    std::set<pollfd*>* brokenDescryptors;
 };
 
 class ClientsAcceptor {
