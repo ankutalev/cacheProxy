@@ -5,8 +5,39 @@
 #include <netdb.h>
 #include <cstring>
 #include <poll.h>
+#include <fcntl.h>
 #include "picohttpparser/picohttpparser.h"
 #include "ClientsAcceptor.h"
+
+
+bool httpParse(const std::string &req, ConnectionInfo* info) {
+    const char* path;
+    const char* method;
+    int pret, minor_version;
+    struct phr_header headers[100];
+    size_t prevbuflen = 0, method_len, path_len, num_headers;
+    num_headers = sizeof(headers) / sizeof(headers[0]);
+    pret = phr_parse_request(req.c_str(), req.size(), &method, &method_len, &path, &path_len,
+                             &minor_version, headers, &num_headers, prevbuflen);
+    if (pret == -1)
+        return false;
+    std::cout << "\n\n\nSTART OF INFORMATION\n\n\n";
+    printf("request is %d bytes long\n", pret);
+    info->method = method;
+    info->path = path;
+    for (int i = 0; i != num_headers; ++i) {
+        info->otherHeaders[headers[i].name] = headers[i].value;
+        if (!std::strcmp(headers[i].name, "Host"))
+            info->host = headers[i].value;
+    }
+    return true;
+}
+
+
+
+
+
+
 
 static void *writeToBrowser(void *params) {
     pollfd *info = (pollfd *) params;
@@ -16,54 +47,60 @@ static void *writeToBrowser(void *params) {
     return NULL;
 }
 
-static void *registerConnection(void *info) {
-    const static int BUFFER_LENGTH = 100;
-    char buffer[BUFFER_LENGTH + 1];
-    std::fill(buffer, buffer + BUFFER_LENGTH + 1, 0);
-    ThreadRegisterInfo *trInfo = (ThreadRegisterInfo *) info;
-    std::cout << "I accept: " << trInfo->descyptor->fd << "\n";
-    std::string record;
-    while (ssize_t read = recv(trInfo->descyptor->fd, buffer, BUFFER_LENGTH, 0)) {
-        record += buffer;
-        std::cout << "I READ " << read << std::endl;
+
+static void* targetConnect(void* arg) {
+    pollfd* client = (pollfd*) arg;
+    const static int BUFFER_LENGTH = 1500;
+    char buffer[BUFFER_LENGTH];
+    std::fill(buffer, buffer + BUFFER_LENGTH, 0);
+    std::cout << "CONNECT TO TARGET FROM: " << client->fd << "\n";
+    std::string request;
+    while (ssize_t read = recv(client->fd, buffer, BUFFER_LENGTH, 0)) {
+        request += buffer;
         if (read != BUFFER_LENGTH)
             break;
     }
-    std::cout << " zashel!!!\n";
-    std::cout << "i read " << record << std::endl;
-    trInfo->descyptor->events = POLLOUT;
-//    std::cout<<write(trInfo->descyptor->fd,"sosi jopu",9)<<std::endl;
-
-    const char *path;
-    const char *method;
-    int pret, minor_version;
-    struct phr_header headers[100];
-    size_t prevbuflen = 0, method_len, path_len, num_headers;
-    num_headers = sizeof(headers) / sizeof(headers[0]);
-    pret = phr_parse_request(record.c_str(), record.size(), &method, &method_len, &path, &path_len,
-                             &minor_version, headers, &num_headers, prevbuflen);
-    if (pret == -1)
-        return (void *) 1;
-    std::cout << "\n\n\nSTART OF INFORMATION\n\n\n";
-    printf("request is %d bytes long\n", pret);
-    ConnectionInfo connectionInfo;
-    connectionInfo.method = method;
-    connectionInfo.path = path;
-    for (int i = 0; i != num_headers; ++i) {
-        connectionInfo.otherHeaders[headers[i].name] = headers[i].value;
-        if (!std::strcmp(headers[i].name, "Host"))
-            connectionInfo.host = headers[i].value;
+    std::cout << "i read " << request << std::endl;
+    ConnectionInfo targetInfo;
+    if (!httpParse(request, &targetInfo)) {
+        std::cout << "Invalid http request received!\n";
     }
+
+
     return NULL;
 }
 
 
-ClientsAcceptor::ClientsAcceptor() {
+static void* acceptConnection(void* args) {
+    ThreadRegisterInfo* descs = (ThreadRegisterInfo*) args;
+    sockaddr_in addr;
+    size_t addSize = sizeof(addr);
+    int newClient = accept(*descs->server, (sockaddr*) &addr, (socklen_t*) &addSize);
+
+
+    if (newClient == -1) {
+        throw std::runtime_error("can't accept!");
+    }
+    //is this required?
+    fcntl(newClient, F_SETFL, fcntl(newClient, F_GETFL, 0) | O_NONBLOCK);
+    descs->client->fd = newClient;
+    return NULL;
+}
+
+
+ClientsAcceptor::ClientsAcceptor() : pool(1) {
     port = DEFAULT_PORT;
     clientSocket = -1;
 
     CLIENT_SOCKET_SIZE = sizeof(clientAddr);
     serverSocket = socket(AF_INET, SOCK_STREAM, 0);
+
+    pollDescryptors = new std::vector<pollfd>;
+    transferMap = new std::map<pollfd*, pollfd*>;
+    dataPieces = new std::map<pollfd*, std::vector<char> >;
+
+
+
     int opt = 1;
     setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     if (serverSocket == -1)
@@ -74,7 +111,6 @@ ClientsAcceptor::ClientsAcceptor() {
     serverAddr.sin_port = htons(port);
 
     if (bind(serverSocket, (sockaddr *) &serverAddr, sizeof(serverAddr))) {
-        perror("govno \n");
         throw std::runtime_error("Can't bind server socket!");
     }
 
@@ -82,9 +118,19 @@ ClientsAcceptor::ClientsAcceptor() {
     if (listen(serverSocket, MAXIMIUM_CLIENTS))
         throw std::runtime_error("Can't listen this socket!");
 
+    if (fcntl(serverSocket, F_SETFL, fcntl(serverSocket, F_GETFL, 0) | O_NONBLOCK) == -1) {
+        throw std::runtime_error("Can't make server socket nonblock!");
+    }
+
+    pollfd me;
+    me.fd = serverSocket;
+    me.events = POLLIN;
+    pollDescryptors->reserve(MAXIMIUM_CLIENTS);
+    pollDescryptors->push_back(me);
+
 }
 
-ClientsAcceptor::ClientsAcceptor(int port) : port(port) {
+ClientsAcceptor::ClientsAcceptor(int port) : port(port), pool(1) {
     serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     CLIENT_SOCKET_SIZE = sizeof(clientAddr);
     if (serverSocket == -1)
@@ -104,36 +150,59 @@ ClientsAcceptor::ClientsAcceptor(int port) : port(port) {
 
 }
 
-bool ClientsAcceptor::listenAndRegister() {
-    size_t clientSize = sizeof(sockaddr_in);
-    std::string record;
-    pool.startAll();
-    while (1) {
-        if (clients.empty())
-            clientSocket = accept(serverSocket, (sockaddr *) &clientAddr, (socklen_t *) &clientSize);
-        pollfd c;
-        c.fd = clientSocket;
-        c.events = POLLIN;
-        clients.push_back(c);
-        ThreadRegisterInfo info(&clients.back(), &connections);
-        poll(clients.data(), clients.size(), 1000);
-        for (std::vector<pollfd>::iterator it = clients.begin(); it != clients.end();) {
-            if (it->revents == POLLIN) {
-                pool.addJob(registerConnection, &info);
-            } else if (it->revents == POLLOUT) {
-                pool.addJob(writeToBrowser, &clients[i]);
-            } else if (it->revents == POLLERR)
-                clients.erase(it);
-            else
-                ++it;
-        }
+void removeFromPoll() {}
 
+void reBase() {}
+
+bool ClientsAcceptor::listenAndRegister() {
+    pool.startAll();
+    while (1)
+        pollManage();
+}
+
+void ClientsAcceptor::pollManage() {
+    pollfd c;
+    c.fd = -1;
+    c.events = POLLIN;
+
+
+    poll(pollDescryptors->data(), pollDescryptors->size(), POLL_DELAY);
+
+    unsigned long descryptorsWithNoTarget = (pollDescryptors->size() - 1) - transferMap->size();
+
+
+    for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
+        if (it->fd != serverSocket and it->revents & POLLIN and !transferMap->count(&*it)) {
+//            sendData(&*it);
+            targetConnect(&*it);
+//            pool.addJob(targetConnect,&*it);
+        } else if (it->revents & POLLIN) {
+            if (it->fd == serverSocket) {
+                ThreadRegisterInfo info(&serverSocket, &c);
+//                pool.addJob(acceptConnection,&info);
+                acceptConnection(&info);
+            } else {
+//                readData(&*it);
+            }
+        }
     }
-    return true;
+
+    removeFromPoll();
+    if (pollDescryptors->size() > 10)
+        reBase();
+
+
+    if (c.fd != -1) {
+        pollDescryptors->push_back(c);
+        std::cout << "PUSHBACKUL!\n";
+    }
+
 }
 
 
 ClientsAcceptor::~ClientsAcceptor() {
     close(serverSocket);
 }
+
+
 
