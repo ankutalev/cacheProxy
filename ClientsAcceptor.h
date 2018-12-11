@@ -82,7 +82,6 @@ private:
     std::map<pollfd*, std::string> hostsToGets;
     std::map<pollfd*, std::vector<char> >* dataPieces;
     std::set<pollfd*> brokenDescryptors;
-    std::set<pollfd*> servers;
 };
 
 

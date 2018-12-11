@@ -48,6 +48,34 @@ static void* writeToBrowser(void* params) {
     return NULL;
 }
 
+static void* readData(void* arg) {
+//    pollfd* server = (pollfd*) arg;
+//    if (!transferPipes->count(idDesc)) {
+//        brokenDescryptors.insert(idDesc);
+//        return;
+//    }
+//    pollfd *to = (*transferPipes)[idDesc];
+//
+//    while (1) {
+//        auto readed = recv(idDesc->fd, buff, BUFFER_SIZE - 1, 0);
+//        buff[readed] = 0;
+//        if (!readed) {
+//            registerDescryptorForPollWrite(to);
+//            brokenDescryptors.insert(idDesc);
+//            return;
+//        }
+//        if (errno == EWOULDBLOCK) {
+//            errno = EXIT_SUCCESS;
+//            registerDescryptorForPollWrite(to);
+//            return;
+//        }
+//        for (int i = 0; i < readed; ++i) {
+//            (*dataPieces)[to].emplace_back(buff[i]);
+//        }
+//    }
+
+    return NULL;
+}
 
 static void* targetConnect(void* arg) {
     TargetConnectInfo* requiredInfo = (TargetConnectInfo*) arg;
@@ -238,7 +266,6 @@ void removeFromPoll() {}
 void reBase() {}
 
 bool ClientsAcceptor::listenAndRegister() {
-//    pool.startAll();
     while (1)
         pollManage();
 }
@@ -248,8 +275,6 @@ void ClientsAcceptor::pollManage() {
     pollfd c;
     c.fd = -1;
     c.events = POLLIN;
-
-
     poll(pollDescryptors->data(), pollDescryptors->size(), POLL_DELAY);
 
     unsigned long oldPollSize = pollDescryptors->size();
@@ -283,7 +308,7 @@ void ClientsAcceptor::pollManage() {
             }
         } else if (it->revents & POLLOUT) {
             SendDataInfo sdi(&*it, dataPieces, pollDescryptors);
-            if (servers.count(&*it)) {
+            if (hostsToGets.count(&*it)) {
                 sendData(&sdi);
                 std::cout << "vislal na server!";
             } else {
