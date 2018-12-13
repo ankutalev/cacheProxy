@@ -6,6 +6,7 @@
 #include <cstring>
 #include <poll.h>
 #include <fcntl.h>
+#include <errno.h>
 #include "picohttpparser/picohttpparser.h"
 #include "ClientsAcceptor.h"
 
@@ -83,9 +84,11 @@ static void* targetConnect(void* arg) {
     const static int BUFFER_LENGTH = 1500;
     char buffer[BUFFER_LENGTH];
     std::fill(buffer, buffer + BUFFER_LENGTH, 0);
-    std::cout << "CONNECT TO TARGET FROM: " << requiredInfo->client->fd << "\n";
+    std::cout << "CONNECT TO TARGET FROM: " << (*requiredInfo->clientIterator)->fd << "\n";
     std::string request;
-    while (ssize_t read = recv(requiredInfo->client->fd, buffer, BUFFER_LENGTH, 0)) {
+    pollfd* oldClientAddress = &**requiredInfo->clientIterator;
+
+    while (ssize_t read = recv((*requiredInfo->clientIterator)->fd, buffer, BUFFER_LENGTH, 0)) {
         request += buffer;
         if (read != BUFFER_LENGTH)
             break;
@@ -95,21 +98,16 @@ static void* targetConnect(void* arg) {
 
     if (!httpParseRequest(request, &targetInfo)) {
         std::cout << "Invalid http request received!\n";
-        requiredInfo->brokenDescryptors->insert(requiredInfo->client);
+        requiredInfo->brokenDescryptors->insert(oldClientAddress);
         return NULL;
     }
 
-    if (targetInfo.method != "GET") {
-        std::string notSupporting = "HTTP 405\r\nAllow: GET\r\n";
-        send(requiredInfo->client->fd, notSupporting.c_str(), notSupporting.size(), 0);
-        close(requiredInfo->client->fd);
-        requiredInfo->client->fd = -requiredInfo->client->fd;
+    if (targetInfo.method != "GET" or targetInfo.method != "HEAD") {
+        std::string notSupporting = "HTTP/1.1 405\r\n\r\nAllow: GET\r\n";
+        send((*requiredInfo->clientIterator)->fd, notSupporting.c_str(), notSupporting.size(), 0);
+        requiredInfo->brokenDescryptors->insert(oldClientAddress);
         std::cerr << "NAPISAL!";
         return NULL;
-    }
-
-    for (int i = 0; i < request.size(); ++i) {
-        (*requiredInfo->dataPieces)[requiredInfo->target].push_back(request[i]);
     }
 
     addrinfo hints = {0};
@@ -123,9 +121,10 @@ static void* targetConnect(void* arg) {
     sockaddr_in targetAddr;
 
     if (!addr) {
-        std::cerr << "Can't resolve host! Terminating" << std::endl;
-        requiredInfo->brokenDescryptors->insert(requiredInfo->client);
-        requiredInfo->brokenDescryptors->insert(requiredInfo->target);
+        std::cerr << "Can't resolve host!" << std::endl;
+        std::string notSupporting = "HTTP/1.1 523\r\n\r\n";
+        send((*requiredInfo->clientIterator)->fd, notSupporting.c_str(), notSupporting.size(), 0);
+        requiredInfo->brokenDescryptors->insert(oldClientAddress);
         return NULL;
     }
 
@@ -133,30 +132,38 @@ static void* targetConnect(void* arg) {
     targetAddr.sin_family = AF_INET;
     targetAddr.sin_port = htons(80);
 
-    int targetSocket = socket(AF_INET, SOCK_STREAM, 0);
+    int targetSocket = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
     if (targetSocket == -1) {
         std::cout << "Can't open target socket! Terminating" << std::endl;
-        requiredInfo->brokenDescryptors->insert(requiredInfo->client);
-        requiredInfo->brokenDescryptors->insert(requiredInfo->target);
-        return NULL;
-    }
-    if (connect(targetSocket, (sockaddr*) &targetAddr, sizeof(targetAddr))) {
-        std::cout << "Can't connect to target! Terminating!" << std::endl;
-        requiredInfo->brokenDescryptors->insert(requiredInfo->client);
-        requiredInfo->brokenDescryptors->insert(requiredInfo->target);
-        return NULL;
-    }
-    if (fcntl(targetSocket, F_SETFL, fcntl(targetSocket, F_GETFL, 0) | O_NONBLOCK) == -1) {
-        std::cout << "Can't make target socket non blocking! Terminating!" << std::endl;
-        requiredInfo->brokenDescryptors->insert(requiredInfo->client);
-        requiredInfo->brokenDescryptors->insert(requiredInfo->target);
+        requiredInfo->brokenDescryptors->insert(oldClientAddress);
         return NULL;
     }
 
-    requiredInfo->target->fd = targetSocket;
-    (*requiredInfo->transferMap)[requiredInfo->client] = (*requiredInfo->transferMap)[requiredInfo->target];
-    (*requiredInfo->transferMap)[requiredInfo->target] = (*requiredInfo->transferMap)[requiredInfo->client];
-    (*requiredInfo->hostToGets)[requiredInfo->target] = targetInfo.path;
+
+    if (connect(targetSocket, (sockaddr*) &targetAddr, sizeof(targetAddr)) != 0 and errno != EINPROGRESS) {
+        std::cout << "Can't async connect to target! Terminating!" << std::endl;
+        requiredInfo->brokenDescryptors->insert(oldClientAddress);
+        return NULL;
+    }
+
+
+    pollfd target;
+    target.fd = targetSocket;
+    target.events = POLLOUT;
+
+    *requiredInfo->clientIterator = requiredInfo->pollDescryptos->insert(*requiredInfo->clientIterator + 1, target);
+
+    pollfd* insertedAddress = &**requiredInfo->clientIterator;
+
+
+    for (int i = 0; i < request.size(); ++i) {
+        (*requiredInfo->dataPieces)[insertedAddress].push_back(request[i]);
+    }
+
+
+    (*requiredInfo->transferMap)[oldClientAddress] = (*requiredInfo->transferMap)[insertedAddress];
+    (*requiredInfo->transferMap)[insertedAddress] = (*requiredInfo->transferMap)[oldClientAddress];
+    (*requiredInfo->hostToGets)[&target] = targetInfo.path;
     return NULL;
 }
 
@@ -276,30 +283,19 @@ void ClientsAcceptor::pollManage() {
     pollfd c;
     c.fd = -1;
     c.events = POLLIN;
+
     poll(&(*pollDescryptors)[0], pollDescryptors->size(), POLL_DELAY);
 
-    unsigned long oldPollSize = pollDescryptors->size();
-    for (int j = 0; j < pollDescryptors->size(); ++j) {
-        if (pollDescryptors->at(j).fd < 0)
-            oldPollSize--;
-    }
-    unsigned long descryptorsWithNoTarget = (oldPollSize) - transferMap->size();
-
-    for (unsigned long i = 0; i < descryptorsWithNoTarget; ++i) {
-        pollfd target;
-        target.fd = -1;
-        target.events = POLLOUT;
-        pollDescryptors->push_back(target);
-    }
-
-    std::vector<pollfd>::iterator noTargetsIterator = pollDescryptors->begin() + oldPollSize;
 
     for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
+
+        std::cout << "NOW WORK WITH DESCR" << it->fd << " AND EVENTS " << it->events << "AND REVENTS " << it->revents
+                  << std::endl;
+
         if (it->fd > 0 and it->revents & POLLIN and it->fd != serverSocket and !transferMap->count(&*it)) {
-            TargetConnectInfo tgc(&serverSocket, &*it, &*noTargetsIterator, dataPieces, transferMap,
+            TargetConnectInfo tgc(&serverSocket, &it, pollDescryptors, dataPieces, transferMap,
                                   &brokenDescryptors, &hostsToGets);
             targetConnect(&tgc);
-            ++noTargetsIterator;
         } else if (it->revents & POLLIN) {
             if (it->fd == serverSocket) {
                 ThreadRegisterInfo info(&serverSocket, &c);
@@ -317,6 +313,11 @@ void ClientsAcceptor::pollManage() {
             }
             std::cout << "WOW";
         }
+    }
+
+    for (int j = 0; j < pollDescryptors->size(); ++j) {
+        std::cout << (*pollDescryptors)[j].fd << " " << (*pollDescryptors)[j].events << " "
+                  << (*pollDescryptors)[j].revents << std::endl;
     }
 
     removeFromPoll();

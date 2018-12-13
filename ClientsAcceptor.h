@@ -19,17 +19,19 @@ struct ThreadRegisterInfo {
 };
 
 struct TargetConnectInfo {
-    TargetConnectInfo(int* s, pollfd* cl, pollfd* tg, std::map<pollfd*, std::vector<char> >* dp,
+    TargetConnectInfo(int* s, std::vector<pollfd>::iterator* it, std::vector<pollfd>* pd,
+                      std::map<pollfd*, std::vector<char> >* dp,
                       std::map<pollfd*, pollfd*>* tm,
                       std::set<pollfd*>* bd,
-                      std::map<pollfd*, std::string>* ss) : server(s), client(cl), target(tg), dataPieces(dp),
+                      std::map<pollfd*, std::string>* ss) : server(s), clientIterator(it), pollDescryptos(pd),
+                                                            dataPieces(dp),
                                                             transferMap(tm),
                                                             brokenDescryptors(bd),
                                                             hostToGets(ss) {}
 
     int* server;
-    pollfd* client;
-    pollfd* target;
+    std::vector<pollfd>::iterator* clientIterator;
+    std::vector<pollfd>* pollDescryptos;
     std::map<pollfd*, std::vector<char> >* dataPieces;
     std::map<pollfd*, pollfd*>* transferMap;
     std::set<pollfd*>* brokenDescryptors;
