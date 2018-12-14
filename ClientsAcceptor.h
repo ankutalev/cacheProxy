@@ -22,20 +22,24 @@ struct TargetConnectInfo {
     TargetConnectInfo(int* s, std::vector<pollfd>::iterator* it, std::vector<pollfd>* pd,
                       std::map<pollfd*, std::vector<char> >* dp,
                       std::map<pollfd*, pollfd*>* tm,
-                      std::set<pollfd*>* bd,
-                      std::map<pollfd*, std::string>* ss) : server(s), clientIterator(it), pollDescryptos(pd),
-                                                            dataPieces(dp),
-                                                            transferMap(tm),
-                                                            brokenDescryptors(bd),
-                                                            hostToGets(ss) {}
+                      std::map<pollfd*, typeConnectionAndPath>* ss,
+                      std::map<std::string, bool>* ci,
+                      std::map<std::string, std::vector<char> >* cch) : server(s), clientIterator(it),
+                                                                        pollDescryptos(pd),
+                                                                        dataPieces(dp),
+                                                                        transferMap(tm),
+                                                                        descsToPath(ss),
+                                                                        cacheLoaded(ci),
+                                                                        cache(cch) {}
 
     int* server;
     std::vector<pollfd>::iterator* clientIterator;
     std::vector<pollfd>* pollDescryptos;
     std::map<pollfd*, std::vector<char> >* dataPieces;
     std::map<pollfd*, pollfd*>* transferMap;
-    std::set<pollfd*>* brokenDescryptors;
-    std::map<pollfd*, std::string>* hostToGets;
+    std::map<pollfd*, typeConnectionAndPath>* descsToPath;
+    std::map<std::string, bool>* cacheLoaded;
+    std::map<std::string, std::vector<char> >* cache;
 };
 
 struct SendDataInfo {
@@ -77,13 +81,12 @@ private:
     const static int POLL_DELAY = 3000;
     ThreadPool pool;
 
-    std::map<std::string, std::vector<char> > cashe;
-    std::map<std::string, CasheState> isCacheConsistent;
+    std::map<std::string, std::vector<char> > cache;
+    std::map<std::string, bool> cacheLoaded;
     std::vector<pollfd>* pollDescryptors;
     std::map<pollfd*, pollfd*>* transferMap;
-    std::map<pollfd*, std::string> hostsToGets;
+    std::map<pollfd*, typeConnectionAndPath> descsToPath;
     std::map<pollfd*, std::vector<char> >* dataPieces;
-    std::set<pollfd*> brokenDescryptors;
 };
 
 

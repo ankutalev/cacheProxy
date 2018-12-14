@@ -1,3 +1,6 @@
+#pragma ide diagnostic ignored "modernize-use-auto"
+#pragma ide diagnostic ignored "modernize-use-nullptr"
+
 #include <iostream>
 #include <unistd.h>
 #include <cstdio>
@@ -9,6 +12,14 @@
 #include <errno.h>
 #include "picohttpparser/picohttpparser.h"
 #include "ClientsAcceptor.h"
+
+static void registerForWrite(std::vector<pollfd>::iterator* it) {
+    (*it)->events = POLLOUT;
+}
+
+static void removeFromPoll(std::vector<pollfd>::iterator* it) {
+    (*it)->fd = -(*it)->fd;
+}
 
 
 bool httpParseRequest(const std::string &req, ConnectionInfo* info) {
@@ -40,42 +51,29 @@ bool httpParseRequest(const std::string &req, ConnectionInfo* info) {
     return true;
 }
 
+bool httpParseResponse(const char* response, size_t responseLen) {
+    const char* message;
+    int pret, minor_version, status;
+    struct phr_header headers[100];
+    size_t prevbuflen = 0, message_len, num_headers;
+    num_headers = sizeof(headers) / sizeof(headers[0]);
+    pret = phr_parse_response(response, responseLen, &minor_version, &status, &message, &message_len,
+                              headers, &num_headers, prevbuflen);
+    if (pret == -1)
+        return false;
+    std::cout << "RESPONSE IS " << response << std::endl;
+    std::cout << "\n\n\nI PARSED THIS WAY\n\n\n";
+    std::cout << "VERSION " << minor_version << " MESSAGE " << message << " STATUS " << status << std::endl;
+    _exit(7);
+    return true;
+}
+
 
 static void* writeToBrowser(void* params) {
     pollfd* info = (pollfd*) params;
     std::cerr << "ALLO!!!";
     write(info->fd, "sosi jopu", 9);
     close(info->fd);
-    return NULL;
-}
-
-static void* readData(void* arg) {
-//    pollfd* server = (pollfd*) arg;
-//    if (!transferPipes->count(idDesc)) {
-//        brokenDescryptors.insert(idDesc);
-//        return;
-//    }
-//    pollfd *to = (*transferPipes)[idDesc];
-//
-//    while (1) {
-//        auto readed = recv(idDesc->fd, buff, BUFFER_SIZE - 1, 0);
-//        buff[readed] = 0;
-//        if (!readed) {
-//            registerDescryptorForPollWrite(to);
-//            registerDescryptorForPollWrite(to);
-//            brokenDescryptors.insert(idDesc);
-//            return;
-//        }
-//        if (errno == EWOULDBLOCK) {
-//            errno = EXIT_SUCCESS;
-//            registerDescryptorForPollWrite(to);
-//            return;
-//        }
-//        for (int i = 0; i < readed; ++i) {
-//            (*dataPieces)[to].emplace_back(buff[i]);
-//        }
-//    }
-
     return NULL;
 }
 
@@ -97,18 +95,32 @@ static void* targetConnect(void* arg) {
     ConnectionInfo targetInfo;
 
     if (!httpParseRequest(request, &targetInfo)) {
-        std::cout << "Invalid http request received!\n";
-        requiredInfo->brokenDescryptors->insert(oldClientAddress);
+        std::cerr << "Invalid http request received!" << std::endl;
+        removeFromPoll(requiredInfo->clientIterator);
         return NULL;
     }
 
-    if (targetInfo.method != "GET" or targetInfo.method != "HEAD") {
+    if (targetInfo.method != "GET" and targetInfo.method != "HEAD") {
         std::string notSupporting = "HTTP/1.1 405\r\n\r\nAllow: GET\r\n";
         send((*requiredInfo->clientIterator)->fd, notSupporting.c_str(), notSupporting.size(), 0);
-        requiredInfo->brokenDescryptors->insert(oldClientAddress);
-        std::cerr << "NAPISAL!";
+        removeFromPoll(requiredInfo->clientIterator);
+        std::cerr << "Method not allowed!" << std::endl;
         return NULL;
     }
+
+    typeConnectionAndPath metaInfo;
+    metaInfo.path = targetInfo.path;
+    metaInfo.isClient = true;
+    (*requiredInfo->descsToPath)[oldClientAddress] = metaInfo;
+
+
+    if (requiredInfo->cacheLoaded->count(targetInfo.path)) {
+        registerForWrite(requiredInfo->clientIterator);
+        (*requiredInfo->dataPieces)[oldClientAddress] = (*requiredInfo->cache)[targetInfo.path];
+//        todo - это уебищно - я копирую данные из кеша каждый раз
+        return NULL;
+    }
+
 
     addrinfo hints = {0};
     hints.ai_flags = 0;
@@ -124,7 +136,7 @@ static void* targetConnect(void* arg) {
         std::cerr << "Can't resolve host!" << std::endl;
         std::string notSupporting = "HTTP/1.1 523\r\n\r\n";
         send((*requiredInfo->clientIterator)->fd, notSupporting.c_str(), notSupporting.size(), 0);
-        requiredInfo->brokenDescryptors->insert(oldClientAddress);
+        removeFromPoll(requiredInfo->clientIterator);
         return NULL;
     }
 
@@ -134,15 +146,15 @@ static void* targetConnect(void* arg) {
 
     int targetSocket = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
     if (targetSocket == -1) {
-        std::cout << "Can't open target socket! Terminating" << std::endl;
-        requiredInfo->brokenDescryptors->insert(oldClientAddress);
+        std::cerr << "Can't open target socket! Terminating" << std::endl;
+        removeFromPoll(requiredInfo->clientIterator);
         return NULL;
     }
 
 
     if (connect(targetSocket, (sockaddr*) &targetAddr, sizeof(targetAddr)) != 0 and errno != EINPROGRESS) {
-        std::cout << "Can't async connect to target! Terminating!" << std::endl;
-        requiredInfo->brokenDescryptors->insert(oldClientAddress);
+        std::cerr << "Can't async connect to target! Terminating!" << std::endl;
+        removeFromPoll(requiredInfo->clientIterator);
         return NULL;
     }
 
@@ -152,7 +164,6 @@ static void* targetConnect(void* arg) {
     target.events = POLLOUT;
 
     *requiredInfo->clientIterator = requiredInfo->pollDescryptos->insert(*requiredInfo->clientIterator + 1, target);
-
     pollfd* insertedAddress = &**requiredInfo->clientIterator;
 
 
@@ -163,9 +174,44 @@ static void* targetConnect(void* arg) {
 
     (*requiredInfo->transferMap)[oldClientAddress] = (*requiredInfo->transferMap)[insertedAddress];
     (*requiredInfo->transferMap)[insertedAddress] = (*requiredInfo->transferMap)[oldClientAddress];
-    (*requiredInfo->hostToGets)[&target] = targetInfo.path;
+
+    metaInfo.isClient = false;
+
+    (*requiredInfo->descsToPath)[&target] = metaInfo;
     return NULL;
 }
+
+static void* readFromServer(void* arg) {
+    TargetConnectInfo* requiredInfo = (TargetConnectInfo*) arg;
+    pollfd* addr = &**requiredInfo->clientIterator;
+    if (!requiredInfo->transferMap->count(addr)) {
+        std::cerr << "No client to write from server!";
+        removeFromPoll(requiredInfo->clientIterator);
+        return NULL;
+    }
+
+    pollfd* to = (*requiredInfo->transferMap)[addr];
+
+    const static int BUFFER_SIZE = 1500;
+    char buffer[BUFFER_SIZE];
+    std::fill(buffer, buffer + BUFFER_SIZE, 0);
+    std::string response;
+
+    //todo сделать нормальное покусочное считывание
+    while (1) {
+        ssize_t readed = recv(addr->fd, buffer, BUFFER_SIZE, 0);
+        for (int i = 0; i < readed; ++i) {
+            (*requiredInfo->dataPieces)[to].push_back(buffer[i]);
+        }
+
+        //считали все с сервера
+        if (!readed or errno == EWOULDBLOCK) {
+            httpParseResponse(&(*requiredInfo->dataPieces)[to].front(), (*requiredInfo->dataPieces)[to].size());
+
+        }
+    }
+}
+
 
 static void* acceptConnection(void* args) {
     ThreadRegisterInfo* descs = (ThreadRegisterInfo*) args;
@@ -189,6 +235,8 @@ static void* sendData(void* args) {
     ssize_t sended = 0;
     ssize_t size = (*requiredInfo->dataPieces)[requiredInfo->target].size();
 
+    std::cout << "I SENDIND THIS" << &(*requiredInfo->dataPieces)[requiredInfo->target][0] << std::endl;
+
     do {
         sended = send(requiredInfo->target->fd, &(*requiredInfo->dataPieces)[requiredInfo->target][0],
                       (*requiredInfo->dataPieces)[requiredInfo->target].size(), 0);
@@ -196,15 +244,9 @@ static void* sendData(void* args) {
                 (*requiredInfo->dataPieces)[requiredInfo->target].begin(),
                 (*requiredInfo->dataPieces)[requiredInfo->target].begin() + sended);
     } while (sended > 0);
-    requiredInfo->dataPieces->erase(requiredInfo->target);
-    for (std::vector<pollfd>::iterator it = requiredInfo->pollDescryptors->begin();
-         it != requiredInfo->pollDescryptors->end();) {
-        if (&*it == requiredInfo->target) {
-            (&*it)->events ^= POLLOUT;
-            return NULL;
-        } else ++it;
-    }
 
+    requiredInfo->dataPieces->erase(requiredInfo->target);
+    requiredInfo->target->events = POLLIN;
     return NULL;
 }
 
@@ -292,22 +334,29 @@ void ClientsAcceptor::pollManage() {
         std::cout << "NOW WORK WITH DESCR" << it->fd << " AND EVENTS " << it->events << "AND REVENTS " << it->revents
                   << std::endl;
 
-        if (it->fd > 0 and it->revents & POLLIN and it->fd != serverSocket and !transferMap->count(&*it)) {
-            TargetConnectInfo tgc(&serverSocket, &it, pollDescryptors, dataPieces, transferMap,
-                                  &brokenDescryptors, &hostsToGets);
-            targetConnect(&tgc);
-        } else if (it->revents & POLLIN) {
+        if (it->fd > 0 and it->revents & POLLIN) {
+            //если слушающий сокет  - принимаем конекшон
             if (it->fd == serverSocket) {
                 ThreadRegisterInfo info(&serverSocket, &c);
                 acceptConnection(&info);
-            } else {
-//                readData(&*it)
+                //если сокет - клиент
+            } else if (!descsToPath.count(&*it)) {
+                TargetConnectInfo tgc(&serverSocket, &it, pollDescryptors, dataPieces, transferMap, &descsToPath,
+                                      &cacheLoaded, &cache);
+                targetConnect(&tgc);
             }
+                //иначе  считываем инфу с сервера
+            else {
+                TargetConnectInfo tgc(&serverSocket, &it, pollDescryptors, dataPieces, transferMap, &descsToPath,
+                                      &cacheLoaded, &cache);
+                readFromServer(&tgc);
+            }
+
         } else if (it->revents & POLLOUT) {
             SendDataInfo sdi(&*it, dataPieces, pollDescryptors);
-            if (hostsToGets.count(&*it)) {
+            if (!descsToPath[&*it].isClient) {
                 sendData(&sdi);
-                std::cout << "vislal na server!";
+                std::cout << "vislal na server!" << std::endl;
             } else {
                 std::cout << "v keshe poishi!";
             }
@@ -320,7 +369,6 @@ void ClientsAcceptor::pollManage() {
                   << (*pollDescryptors)[j].revents << std::endl;
     }
 
-    removeFromPoll();
 
 //    if (pollDescryptors->size() > 10)
 //
@@ -336,16 +384,5 @@ ClientsAcceptor::~ClientsAcceptor() {
     close(serverSocket);
 }
 
-
-void ClientsAcceptor::removeFromPoll() {
-
-    for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end();) {
-        if (brokenDescryptors.count(&*it) and it->fd > 0) {
-            close(it->fd);
-            std::cout << "CLOSE this! " << it->fd << std::endl;
-            it->fd = -it->fd;
-        } else ++it;
-    }
-}
 
 
