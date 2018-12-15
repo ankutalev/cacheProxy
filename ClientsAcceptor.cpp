@@ -13,11 +13,22 @@
 #include "picohttpparser/picohttpparser.h"
 #include "ClientsAcceptor.h"
 
+
+enum ResponseParseStatus {
+    OK, NoCache, Error
+};
+
 static void registerForWrite(std::vector<pollfd>::iterator* it) {
     (*it)->events = POLLOUT;
 }
 
+static void registerForWrite(pollfd* fd) {
+    fd->events = POLLOUT;
+}
+
+
 static void removeFromPoll(std::vector<pollfd>::iterator* it) {
+    close((*it)->fd);
     (*it)->fd = -(*it)->fd;
 }
 
@@ -51,7 +62,8 @@ bool httpParseRequest(const std::string &req, ConnectionInfo* info) {
     return true;
 }
 
-bool httpParseResponse(const char* response, size_t responseLen) {
+
+ResponseParseStatus httpParseResponse(const char* response, size_t responseLen) {
     const char* message;
     int pret, minor_version, status;
     struct phr_header headers[100];
@@ -60,20 +72,45 @@ bool httpParseResponse(const char* response, size_t responseLen) {
     pret = phr_parse_response(response, responseLen, &minor_version, &status, &message, &message_len,
                               headers, &num_headers, prevbuflen);
     if (pret == -1)
-        return false;
+        return Error;
     std::cout << "RESPONSE IS " << response << std::endl;
-    std::cout << "\n\n\nI PARSED THIS WAY\n\n\n";
     std::cout << "VERSION " << minor_version << " MESSAGE " << message << " STATUS " << status << std::endl;
-    _exit(7);
-    return true;
+    return (status == 200) ? OK : NoCache;
 }
 
 
-static void* writeToBrowser(void* params) {
-    pollfd* info = (pollfd*) params;
-    std::cerr << "ALLO!!!";
-    write(info->fd, "sosi jopu", 9);
-    close(info->fd);
+static void* writeToClient(void* arg) {
+    TargetConnectInfo* requiredInfo = (TargetConnectInfo*) arg;
+    pollfd* client = &**requiredInfo->clientIterator;
+    std::string gettingPath = (*requiredInfo->descsToPath)[client].path;
+
+    //если есть в кеше
+    if (requiredInfo->cacheLoaded->count(gettingPath)) {
+        //проверяем, загружен ли кеш, если нет - выходим пока
+        bool isCacheReady = (*requiredInfo->cacheLoaded)[gettingPath];
+        if (!isCacheReady)
+            return NULL;
+        else {
+            std::cout << "CACHE SIZE IS " << (*requiredInfo->cache)[gettingPath].size() << std::endl;
+            ssize_t s = send(client->fd, &(*requiredInfo->cache)[gettingPath].front(),
+                             (*requiredInfo->cache)[gettingPath].size(), 0);
+            std::cout << "SENDED " << s << std::endl;
+        }
+    }
+        //иначе проверяем дату, которая у нас есть
+    else if (requiredInfo->dataPieces->count(client)) {
+        std::cout << "DATA SIZE IS " << (*requiredInfo->dataPieces)[client].size() << std::endl;
+        ssize_t s = send(client->fd, &(*requiredInfo->dataPieces)[client].front(),
+                         (*requiredInfo->dataPieces)[client].size(), 0);
+        std::cout << "SENDED " << s << std::endl;
+    }
+        //иначе данные о кеше были удалены во время закачки (оборвалась клиентская сессия, качающая кеш, нужно отдельно мансить
+    else {
+
+    }
+    //
+    removeFromPoll(requiredInfo->clientIterator);
+    std::cerr << "SENDED!!!";
     return NULL;
 }
 
@@ -116,8 +153,6 @@ static void* targetConnect(void* arg) {
 
     if (requiredInfo->cacheLoaded->count(targetInfo.path)) {
         registerForWrite(requiredInfo->clientIterator);
-        (*requiredInfo->dataPieces)[oldClientAddress] = (*requiredInfo->cache)[targetInfo.path];
-//        todo - это уебищно - я копирую данные из кеша каждый раз
         return NULL;
     }
 
@@ -166,18 +201,22 @@ static void* targetConnect(void* arg) {
     *requiredInfo->clientIterator = requiredInfo->pollDescryptos->insert(*requiredInfo->clientIterator + 1, target);
     pollfd* insertedAddress = &**requiredInfo->clientIterator;
 
+    std::cout << "old " << oldClientAddress << " inserted " << insertedAddress << " insrted fd " << insertedAddress->fd
+              << std::endl;
+
+
 
     for (int i = 0; i < request.size(); ++i) {
         (*requiredInfo->dataPieces)[insertedAddress].push_back(request[i]);
     }
 
 
-    (*requiredInfo->transferMap)[oldClientAddress] = (*requiredInfo->transferMap)[insertedAddress];
-    (*requiredInfo->transferMap)[insertedAddress] = (*requiredInfo->transferMap)[oldClientAddress];
+    (*requiredInfo->transferMap)[oldClientAddress] = insertedAddress;
+    (*requiredInfo->transferMap)[insertedAddress] = oldClientAddress;
 
     metaInfo.isClient = false;
 
-    (*requiredInfo->descsToPath)[&target] = metaInfo;
+    (*requiredInfo->descsToPath)[insertedAddress] = metaInfo;
     return NULL;
 }
 
@@ -204,12 +243,42 @@ static void* readFromServer(void* arg) {
             (*requiredInfo->dataPieces)[to].push_back(buffer[i]);
         }
 
-        //считали все с сервера
-        if (!readed or errno == EWOULDBLOCK) {
-            httpParseResponse(&(*requiredInfo->dataPieces)[to].front(), (*requiredInfo->dataPieces)[to].size());
-
+        if (readed == -1 and errno != EWOULDBLOCK) {
+            //huynya proizoshla
         }
+        (*requiredInfo->cacheLoaded)[(*requiredInfo->descsToPath)[addr].path] = false;
+        //считали все с сервера
+        if (!readed) {
+            (*requiredInfo->cacheLoaded)[(*requiredInfo->descsToPath)[addr].path] = true;
+            ResponseParseStatus status = httpParseResponse(&(*requiredInfo->dataPieces)[to].front(),
+                                                           (*requiredInfo->dataPieces)[to].size());
+            switch (status) {
+                case OK:
+                    //ок - записать в кеш, удлаить из сообщений todo удалить из трансфер мапы? а в сендклиент смотреть сначала на кеш а потом на присутсвие в мапе
+                    (*requiredInfo->cache)[(*requiredInfo->descsToPath)[addr].path].swap(
+                            (*requiredInfo->dataPieces)[to]);
+                    requiredInfo->dataPieces->erase(to);
+                    requiredInfo->transferMap->erase(to);
+                    requiredInfo->transferMap->erase(addr);
+                    break;
+                case Error:
+                    //ошибка при парсинге - удаляем всю информацию о том,что мы были на этой странице и закрываем соединение
+                    (*requiredInfo->cacheLoaded).erase((*requiredInfo->descsToPath)[addr].path);
+                    removeFromPoll(requiredInfo->clientIterator);
+                    std::string serverError = "HTTP/1.1 523\r\n\r\n";
+                    for (int i = 0; i < serverError.size(); ++i) {
+                        (*requiredInfo->dataPieces)[to].push_back(serverError[i]);
+                    }
+                    break;
+                    //Если кеширования не происходит, дата просто остается в таргет запросе
+            }
+            removeFromPoll(requiredInfo->clientIterator);
+            registerForWrite(to);
+            return NULL;
+        }
+
     }
+
 }
 
 
@@ -358,7 +427,10 @@ void ClientsAcceptor::pollManage() {
                 sendData(&sdi);
                 std::cout << "vislal na server!" << std::endl;
             } else {
-                std::cout << "v keshe poishi!";
+                std::cout << "rabotaem s clientami!!";
+                TargetConnectInfo tgc(&serverSocket, &it, pollDescryptors, dataPieces, transferMap, &descsToPath,
+                                      &cacheLoaded, &cache);
+                writeToClient(&tgc);
             }
             std::cout << "WOW";
         }
