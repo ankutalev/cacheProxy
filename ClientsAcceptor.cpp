@@ -65,16 +65,15 @@ bool httpParseRequest(std::string &req, ConnectionInfo* info) {
             info->host = info->otherHeaders[headerName];
     }
     std::cout << "finish" << std::endl;
-    std::string changedRequest = info->method + " " + info->path + " " + "HTTP/1.0\r\n";
+    req = info->method + " " + info->path + " " + "HTTP/1.0\r\n";
     for (std::map<std::string, std::string>::iterator it = info->otherHeaders.begin();
          it != info->otherHeaders.end(); ++it) {
-        changedRequest += it->first;
-        changedRequest += ": ";
-        changedRequest += it->second;
-        changedRequest += "\r\n";
+        req += it->first;
+        req += ": ";
+        req += it->second;
+        req += "\r\n";
     }
-    changedRequest += "\r\n";
-    req = changedRequest;
+    req += "\r\n";
     return true;
 }
 
@@ -153,6 +152,12 @@ static void* targetConnect(void* arg) {
         request += buffer;
         if (read != BUFFER_LENGTH)
             break;
+    }
+
+    if (request.empty()) {
+        std::cerr << "Mythical zalupa" << std::endl;
+        removeFromPoll(requiredInfo->clientIterator);
+        return NULL;
     }
     std::cout << "i read " << request << std::endl;
     ConnectionInfo targetInfo;
