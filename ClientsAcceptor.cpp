@@ -33,7 +33,7 @@ static void removeFromPoll(std::vector<pollfd>::iterator* it) {
 }
 
 
-bool httpParseRequest(const std::string &req, ConnectionInfo* info) {
+bool httpParseRequest(std::string &req, ConnectionInfo* info) {
     const char* path;
     const char* method;
     int pret, minor_version;
@@ -44,7 +44,7 @@ bool httpParseRequest(const std::string &req, ConnectionInfo* info) {
                              &minor_version, headers, &num_headers, prevbuflen);
     if (pret == -1)
         return false;
-    std::cout << "\n\n\nSTART OF INFORMATION\n\n\n";
+    std::cout << "REQUESt IS" << req << std::endl;
     printf("request is %d bytes long\n", pret);
     info->method = method;
     info->method.erase(info->method.begin() + method_len, info->method.end());
@@ -53,15 +53,32 @@ bool httpParseRequest(const std::string &req, ConnectionInfo* info) {
     for (int i = 0; i != num_headers; ++i) {
         std::string headerName = headers[i].name;
         headerName.erase(headerName.begin() + headers[i].name_len, headerName.end());
-        info->otherHeaders[headerName] = headers[i].value;
-        info->otherHeaders[headerName].erase(info->otherHeaders[headerName].begin() + headers[i].value_len,
-                                             info->otherHeaders[headerName].end());
+        if (headerName != "Connection") {
+            info->otherHeaders[headerName] = headers[i].value;
+            info->otherHeaders[headerName].erase(info->otherHeaders[headerName].begin() + headers[i].value_len,
+                                                 info->otherHeaders[headerName].end());
+        }
+        if (headerName == "Connection") {
+            std::cout << "got you";
+        }
         if (headerName == "Host")
             info->host = info->otherHeaders[headerName];
     }
+    std::cout << "finish" << std::endl;
+    std::string changedRequest = info->method + " " + info->path + " " + "HTTP/1.0\r\n";
+    for (std::map<std::string, std::string>::iterator it = info->otherHeaders.begin();
+         it != info->otherHeaders.end(); ++it) {
+        changedRequest += it->first;
+        changedRequest += ": ";
+        changedRequest += it->second;
+        changedRequest += "\r\n";
+    }
+    changedRequest += "\r\n";
+    req = changedRequest;
     return true;
 }
 
+//"GET http://lib.ru/ HTTP/1.1\r\nHost: lib.ru\r\nUser-Agent: Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:64.0) Gecko/20100101 Firefox/64.0\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\nAccept-Encoding: gzip, deflate\r\nConnection: keep-alive\r\nUpgrade-Insecure-Requests: 1\r\nIf-Modified-Since: Tue, 13 Nov 2018 17:58:28 GMT\r\nCache-Control: max-age=0\r\n\r\n"
 
 ResponseParseStatus httpParseResponse(const char* response, size_t responseLen) {
     const char* message;
@@ -71,10 +88,12 @@ ResponseParseStatus httpParseResponse(const char* response, size_t responseLen) 
     num_headers = sizeof(headers) / sizeof(headers[0]);
     pret = phr_parse_response(response, responseLen, &minor_version, &status, &message, &message_len,
                               headers, &num_headers, prevbuflen);
+
+    std::cout << "RESPONSE IS" << response << std::endl;
     if (pret == -1)
         return Error;
-    std::cout << "RESPONSE IS " << response << std::endl;
-    std::cout << "VERSION " << minor_version << " MESSAGE " << message << " STATUS " << status << std::endl;
+//    std::cout << "RESPONSE IS " << response << std::endl;
+    std::cout << "VERSION " << minor_version << " STATUS " << status << std::endl;
     return (status == 200) ? OK : NoCache;
 }
 
@@ -94,29 +113,36 @@ static void* writeToClient(void* arg) {
             std::cout << "CACHE SIZE IS " << (*requiredInfo->cache)[gettingPath].size() << std::endl;
             ssize_t s = send(client->fd, &(*requiredInfo->cache)[gettingPath].front(),
                              (*requiredInfo->cache)[gettingPath].size(), 0);
-            std::cout << "SENDED " << s << std::endl;
+            perror("SEND");
+            std::cout << "SENDED FROM CACHE" << s << std::endl;
+            if (s == 0) {
+                std::cout << "AAAA???" << std::endl;
+            }
         }
     }
         //иначе проверяем дату, которая у нас есть
     else if (requiredInfo->dataPieces->count(client)) {
+        std::cout << "DATA IS " << &(*requiredInfo->dataPieces)[client].front() << std::endl;
         std::cout << "DATA SIZE IS " << (*requiredInfo->dataPieces)[client].size() << std::endl;
         ssize_t s = send(client->fd, &(*requiredInfo->dataPieces)[client].front(),
                          (*requiredInfo->dataPieces)[client].size(), 0);
         std::cout << "SENDED " << s << std::endl;
+
     }
         //иначе данные о кеше были удалены во время закачки (оборвалась клиентская сессия, качающая кеш, нужно отдельно мансить
     else {
-
+        std::cerr << "PIzDA TUT";
     }
     //
     removeFromPoll(requiredInfo->clientIterator);
     std::cerr << "SENDED!!!";
+    perror("what");
     return NULL;
 }
 
 static void* targetConnect(void* arg) {
     TargetConnectInfo* requiredInfo = (TargetConnectInfo*) arg;
-    const static int BUFFER_LENGTH = 1500;
+    const static int BUFFER_LENGTH = 5000;
     char buffer[BUFFER_LENGTH];
     std::fill(buffer, buffer + BUFFER_LENGTH, 0);
     std::cout << "CONNECT TO TARGET FROM: " << (*requiredInfo->clientIterator)->fd << "\n";
@@ -223,6 +249,8 @@ static void* targetConnect(void* arg) {
 static void* readFromServer(void* arg) {
     TargetConnectInfo* requiredInfo = (TargetConnectInfo*) arg;
     pollfd* addr = &**requiredInfo->clientIterator;
+
+    std::cout << "read from server" << std::endl;
     if (!requiredInfo->transferMap->count(addr)) {
         std::cerr << "No client to write from server!";
         removeFromPoll(requiredInfo->clientIterator);
@@ -231,7 +259,7 @@ static void* readFromServer(void* arg) {
 
     pollfd* to = (*requiredInfo->transferMap)[addr];
 
-    const static int BUFFER_SIZE = 1500;
+    const static int BUFFER_SIZE = 5000;
     char buffer[BUFFER_SIZE];
     std::fill(buffer, buffer + BUFFER_SIZE, 0);
     std::string response;
@@ -239,12 +267,14 @@ static void* readFromServer(void* arg) {
     //todo сделать нормальное покусочное считывание
     while (1) {
         ssize_t readed = recv(addr->fd, buffer, BUFFER_SIZE, 0);
+        std::cout << readed << std::endl;
         for (int i = 0; i < readed; ++i) {
             (*requiredInfo->dataPieces)[to].push_back(buffer[i]);
         }
 
         if (readed == -1 and errno != EWOULDBLOCK) {
             //huynya proizoshla
+            perror("HUYNYA");
         }
         (*requiredInfo->cacheLoaded)[(*requiredInfo->descsToPath)[addr].path] = false;
         //считали все с сервера
@@ -252,6 +282,10 @@ static void* readFromServer(void* arg) {
             (*requiredInfo->cacheLoaded)[(*requiredInfo->descsToPath)[addr].path] = true;
             ResponseParseStatus status = httpParseResponse(&(*requiredInfo->dataPieces)[to].front(),
                                                            (*requiredInfo->dataPieces)[to].size());
+            if ((*requiredInfo->dataPieces)[to].empty()) {
+                std::cout << "why empty?";
+            }
+            std::string serverError = "HTTP/1.1 523\r\n\r\n";
             switch (status) {
                 case OK:
                     //ок - записать в кеш, удлаить из сообщений todo удалить из трансфер мапы? а в сендклиент смотреть сначала на кеш а потом на присутсвие в мапе
@@ -265,15 +299,22 @@ static void* readFromServer(void* arg) {
                     //ошибка при парсинге - удаляем всю информацию о том,что мы были на этой странице и закрываем соединение
                     (*requiredInfo->cacheLoaded).erase((*requiredInfo->descsToPath)[addr].path);
                     removeFromPoll(requiredInfo->clientIterator);
-                    std::string serverError = "HTTP/1.1 523\r\n\r\n";
                     for (int i = 0; i < serverError.size(); ++i) {
                         (*requiredInfo->dataPieces)[to].push_back(serverError[i]);
                     }
                     break;
-                    //Если кеширования не происходит, дата просто остается в таргет запросе
+                case NoCache:
+                    (*requiredInfo).cacheLoaded->erase((*requiredInfo->descsToPath)[addr].path);
+                    break;
             }
             removeFromPoll(requiredInfo->clientIterator);
             registerForWrite(to);
+            return NULL;
+        }
+        if (errno == EWOULDBLOCK) {
+//            removeFromPoll(requiredInfo->clientIterator);
+            std::cout << "EWOUDLBLOCK" << std::endl;
+//            registerForWrite(to);
             return NULL;
         }
 
@@ -305,6 +346,7 @@ static void* sendData(void* args) {
     ssize_t size = (*requiredInfo->dataPieces)[requiredInfo->target].size();
 
     std::cout << "I SENDIND THIS" << &(*requiredInfo->dataPieces)[requiredInfo->target][0] << std::endl;
+
 
     do {
         sended = send(requiredInfo->target->fd, &(*requiredInfo->dataPieces)[requiredInfo->target][0],
@@ -395,7 +437,7 @@ void ClientsAcceptor::pollManage() {
     c.fd = -1;
     c.events = POLLIN;
 
-    poll(&(*pollDescryptors)[0], pollDescryptors->size(), POLL_DELAY);
+    poll(&(*pollDescryptors)[0], pollDescryptors->size(), 500);
 
 
     for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
