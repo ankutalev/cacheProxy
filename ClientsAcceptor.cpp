@@ -31,7 +31,7 @@ static void removeFromPoll(std::vector<pollfd>::iterator* it) {
     if (close((*it)->fd)) {
         std::cout << it << std::endl;
         std::cout << (*it)->fd << std::endl;
-        perror("close");
+//        //perror("close");
         _exit(231);
     }
     (*it)->fd = -(*it)->fd;
@@ -120,7 +120,7 @@ static void* writeToClient(void* arg) {
             std::cout << "CACHE SIZE IS " << (*requiredInfo->cache)[gettingPath].size() << std::endl;
             ssize_t s = send(client->fd, &(*requiredInfo->cache)[gettingPath].front(),
                              (*requiredInfo->cache)[gettingPath].size(), 0);
-            perror("SEND");
+//            //perror("SEND");
             std::cout << "SENDED FROM CACHE" << s << std::endl;
             if (s == 5962) {
                 std::cout << "AAAA???" << std::endl;
@@ -134,7 +134,7 @@ static void* writeToClient(void* arg) {
         ssize_t s = send(client->fd, &(*requiredInfo->dataPieces)[client].front(),
                          (*requiredInfo->dataPieces)[client].size(), 0);
         std::cout << "SENDED " << s << std::endl;
-        perror("after send");
+//        //perror("after send");
     }
 
         //иначе данные о кеше были удалены во время закачки (оборвалась клиентская сессия, качающая кеш, нужно отдельно мансить
@@ -148,7 +148,7 @@ static void* writeToClient(void* arg) {
     if (errno == EINVAL) {
         std::cout << "ewe zagadochney" << std::endl;
     }
-    perror("what");
+    //perror("what");
     if (errno == EINPROGRESS) {
         std::cerr << "Da nu nhauy" << std::endl;
     }
@@ -172,7 +172,7 @@ static void* targetConnect(void* arg) {
 
     if (request.empty()) {
         std::cerr << "Mythical zalupa" << std::endl;
-        perror("wtf");
+        //perror("wtf");
         removeFromPoll(requiredInfo->clientIterator);
         return NULL;
     }
@@ -287,7 +287,7 @@ static void* readFromServer(void* arg) {
 
     char tmp = 1;
 //    if (getsockopt(addr->fd,SOL_SOCKET,SO_ERROR,&tmp,(socklen_t*) sizeof(tmp))) {
-//        perror("NE VERU!");
+//        //perror("NE VERU!");
 //        return NULL;
 //    }
 
@@ -315,7 +315,7 @@ static void* readFromServer(void* arg) {
 
         if (readed == -1 and errno != EWOULDBLOCK) {
             //huynya proizoshla
-            perror("HUYNYA");
+            //perror("HUYNYA");
             _exit(9);
             int a = to->fd;
             int b = to->events;
