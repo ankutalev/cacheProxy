@@ -7,7 +7,7 @@
 #include <map>
 
 
-struct HelpStructures {
+struct RequestInfo {
     std::string method;
     std::string path;
     std::string host;

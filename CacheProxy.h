@@ -4,7 +4,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include "HelpStructures.h"
+#include "RequestInfo.h"
 #include "ThreadPool.h"
 
 
@@ -17,6 +17,7 @@ public:
     explicit CacheProxy(int port);
 
     void startWorking();
+
 
 private:
     void pollManage();
