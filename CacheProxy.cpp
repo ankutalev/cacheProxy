@@ -399,10 +399,6 @@ void CacheProxy::pollManage() {
 
     poll(&(*pollDescryptors)[0], pollDescryptors->size(), POLL_DELAY);
 
-    std::cout << std::endl << std::cout << "AFTER POLL" << std::endl;
-    for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
-        std::cout << it->fd << " " << it->events << " " << it->revents << std::endl;
-    }
 
     for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
         if (it->fd > 0 and it->revents & POLLERR) {
@@ -498,16 +494,10 @@ void CacheProxy::removeDeadDescryptors() {
     transferMap = ntransferPipes;
     delete pollDescryptors;
     pollDescryptors = npollDescryptors;
-//    std::cout << "REBASED FINISHED with size " << pollDescryptors->size() << std::endl;
-//    std::cout << "DATA SIZE " << dataPieces->size() << std::endl;
     for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
         std::cout << &*it << std::endl;
     }
 
-
-    if (pollDescryptors->size() == 2 and dataPieces->size() == 1) {
-        std::cout << "a";
-    }
 
 }
 
