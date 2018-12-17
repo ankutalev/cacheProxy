@@ -271,7 +271,7 @@ static void* readFromServer(void* arg) {
     std::fill(buffer, buffer + BUFFER_SIZE, 0);
     std::string response;
 
-    //todo считывание по кускам
+
     while (1) {
         ssize_t readed = recv(addr->fd, buffer, BUFFER_SIZE, 0);
         std::cout << readed << std::endl;
