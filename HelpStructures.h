@@ -1,17 +1,27 @@
 #pragma once
 
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+#include <string>
 #include <map>
+#include <vector>
 #include <poll.h>
-#include <set>
-#include "ConnectionInfo.h"
-#include "ThreadPool.h"
+#include <map>
+
+
+struct HelpStructures {
+    std::string method;
+    std::string path;
+    std::string host;
+    std::map<std::string, std::string> otherHeaders;
+};
+
+struct typeConnectionAndPath {
+    bool isClient;
+    std::string path;
+};
 
 struct ThreadRegisterInfo {
     ThreadRegisterInfo(int* d, pollfd* pd) : server(d), client(pd) {}
+
     int* server;
     pollfd* client;
 };
@@ -50,36 +60,3 @@ struct SendDataInfo {
     std::map<pollfd*, std::vector<char> >* dataPieces;
     std::vector<pollfd>* pollDescryptors;
 };
-
-class ClientsAcceptor {
-public:
-    ClientsAcceptor();
-
-    ~ClientsAcceptor();
-
-    explicit ClientsAcceptor(int port);
-
-    bool listenAndRegister();
-
-private:
-    void pollManage();
-
-    void removeDeadDescryptors();
-
-private:
-    int port;
-    int serverSocket;
-    struct sockaddr_in serverAddr, clientAddr;
-    const static int MAXIMIUM_CLIENTS = 2048;
-    const static int DEFAULT_PORT = 8080;
-    const static int POLL_DELAY = 3000;
-    ThreadPool pool;
-    std::map<std::string, std::vector<char> > cache;
-    std::map<std::string, bool> cacheLoaded;
-    std::vector<pollfd>* pollDescryptors;
-    std::map<pollfd*, pollfd*>* transferMap;
-    std::map<pollfd*, typeConnectionAndPath> descsToPath;
-    std::map<pollfd*, std::vector<char> >* dataPieces;
-};
-
-

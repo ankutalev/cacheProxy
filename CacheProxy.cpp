@@ -13,7 +13,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include "picohttpparser/picohttpparser.h"
-#include "ClientsAcceptor.h"
+#include "CacheProxy.h"
 
 
 enum ResponseParseStatus {
@@ -39,7 +39,7 @@ static void removeFromPoll(std::vector<pollfd>::iterator* it) {
 }
 
 
-bool httpParseRequest(std::string &req, ConnectionInfo* info) {
+bool httpParseRequest(std::string &req, HelpStructures* info) {
     const char* path;
     const char* method;
     int pret, minor_version;
@@ -124,9 +124,9 @@ static void* writeToClient(void* arg) {
         std::cout << "SENDED " << s << std::endl;
     }
 
-        //todo нет ни в дата сторе ни в кеше - дропнули клиента, который качал что-то большое, гыгы
+
     else {
-        std::cout << "PIzDA TUT" << std::endl;
+        //todo нет ни в дата сторе ни в кеше - дропнули клиента, который качал что-то большое, гыгы
     }
     //
     removeFromPoll(requiredInfo->clientIterator);
@@ -154,7 +154,7 @@ static void* targetConnect(void* arg) {
         return NULL;
     }
     std::cout << "i read " << request << std::endl;
-    ConnectionInfo targetInfo;
+    HelpStructures targetInfo;
 
     if (!httpParseRequest(request, &targetInfo)) {
         std::cout << "Invalid http request received!" << std::endl;
@@ -236,7 +236,7 @@ static void* targetConnect(void* arg) {
     }
 
     std::cout << "old " << oldClientAddress << " inserted " << insertedAddress << " insrted fd " << insertedAddress->fd
-            << std::endl;
+              << std::endl;
 
 
     for (int i = 0; i < request.size(); ++i) {
@@ -250,6 +250,7 @@ static void* targetConnect(void* arg) {
     metaInfo.isClient = false;
 
     (*requiredInfo->descsToPath)[insertedAddress] = metaInfo;
+    (*requiredInfo->clientIterator)->events = 0;
     return NULL;
 }
 
@@ -298,6 +299,7 @@ static void* readFromServer(void* arg) {
                     requiredInfo->dataPieces->erase(to);
                     requiredInfo->transferMap->erase(to);
                     requiredInfo->transferMap->erase(addr);
+                    to->events = POLLOUT;
                     break;
                 case Error:
                     //некорректный запрос - удаляем все информацию о соединениях
@@ -374,68 +376,21 @@ static void* sendData(void* args) {
     return NULL;
 }
 
-ClientsAcceptor::ClientsAcceptor() : pool(1) {
-    port = DEFAULT_PORT;
-    serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-
-    pollDescryptors = new std::vector<pollfd>;
-    transferMap = new std::map<pollfd*, pollfd*>;
-    dataPieces = new std::map<pollfd*, std::vector<char> >;
-
-
-    int opt = 1;
-    setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    if (serverSocket == -1)
-        throw std::runtime_error("Can't open server socket!");
-
-    serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(port);
-
-    if (bind(serverSocket, (sockaddr*) &serverAddr, sizeof(serverAddr))) {
-        throw std::runtime_error("Can't bind server socket!");
-    }
-
-
-    if (listen(serverSocket, MAXIMIUM_CLIENTS))
-        throw std::runtime_error("Can't listen this socket!");
-
-    if (fcntl(serverSocket, F_SETFL, fcntl(serverSocket, F_GETFL, 0) | O_NONBLOCK) == -1) {
-        throw std::runtime_error("Can't make server socket nonblock!");
-    }
-
-    pollfd me;
-    me.fd = serverSocket;
-    me.events = POLLIN;
-    pollDescryptors->reserve(MAXIMIUM_CLIENTS);
-    pollDescryptors->push_back(me);
-
+CacheProxy::CacheProxy() : pool(1) {
+    init(DEFAULT_PORT);
 }
 
-ClientsAcceptor::ClientsAcceptor(int port) : port(port), pool(1) {
-    serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-    if (serverSocket == -1)
-        throw std::runtime_error("Can't open server socket!");
-
-    serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(port);
-
-    if (bind(serverSocket, (sockaddr*) &serverAddr, sizeof(serverAddr)))
-        throw std::runtime_error("Can't bind server socket!");
-
-
-    if (listen(serverSocket, MAXIMIUM_CLIENTS))
-        throw std::runtime_error("Can't listen this socket!");
+CacheProxy::CacheProxy(int port) : port(port), pool(1) {
+    init(port);
 }
 
-bool ClientsAcceptor::listenAndRegister() {
+void CacheProxy::startWorking() {
     while (1)
         pollManage();
 }
 
 
-void ClientsAcceptor::pollManage() {
+void CacheProxy::pollManage() {
     pollfd c;
     c.fd = -1;
     c.events = POLLIN;
@@ -456,6 +411,15 @@ void ClientsAcceptor::pollManage() {
             client->fd = (-client->fd);
             removeFromPoll(&it);
             std::cout << "REFUSED" << std::endl;
+        } else if (it->revents & POLLOUT and it->fd > 0) {
+            if (!descsToPath[&*it].isClient) {
+                SendDataInfo sdi(&*it, dataPieces, pollDescryptors);
+                sendData(&sdi);
+            } else {
+                TargetConnectInfo tgc(&serverSocket, &it, pollDescryptors, dataPieces, transferMap, &descsToPath,
+                                      &cacheLoaded, &cache);
+                writeToClient(&tgc);
+            }
         } else if (it->fd > 0 and it->revents & POLLIN) {
             //если слушающий сокет - принимаем соединения
             if (it->fd == serverSocket) {
@@ -473,17 +437,9 @@ void ClientsAcceptor::pollManage() {
                                       &cacheLoaded, &cache);
                 readFromServer(&tgc);
             }
-        } else if (it->revents & POLLOUT and it->fd > 0) {
-            if (!descsToPath[&*it].isClient) {
-                SendDataInfo sdi(&*it, dataPieces, pollDescryptors);
-                sendData(&sdi);
-            } else {
-                TargetConnectInfo tgc(&serverSocket, &it, pollDescryptors, dataPieces, transferMap, &descsToPath,
-                                      &cacheLoaded, &cache);
-                writeToClient(&tgc);
-            }
         }
     }
+
 
     if (c.fd != -1) {
         pollDescryptors->push_back(c);
@@ -494,11 +450,13 @@ void ClientsAcceptor::pollManage() {
 }
 
 
-ClientsAcceptor::~ClientsAcceptor() {
+CacheProxy::~CacheProxy() {
     close(serverSocket);
+    delete this->transferMap;
+    delete this->pollDescryptors;
 }
 
-void ClientsAcceptor::removeDeadDescryptors() {
+void CacheProxy::removeDeadDescryptors() {
     std::vector<pollfd>* npollDescryptors = new std::vector<pollfd>;
     npollDescryptors->reserve(MAXIMIUM_CLIENTS);
 
@@ -551,6 +509,42 @@ void ClientsAcceptor::removeDeadDescryptors() {
         std::cout << "a";
     }
 
+}
+
+void CacheProxy::init(int port) {
+    serverSocket = socket(AF_INET, SOCK_STREAM, 0);
+
+    pollDescryptors = new std::vector<pollfd>;
+    transferMap = new std::map<pollfd*, pollfd*>;
+    dataPieces = new std::map<pollfd*, std::vector<char> >;
+
+
+    int opt = 1;
+    setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    if (serverSocket == -1)
+        throw std::runtime_error("Can't open server socket!");
+
+    serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(port);
+
+    if (bind(serverSocket, (sockaddr*) &serverAddr, sizeof(serverAddr))) {
+        throw std::runtime_error("Can't bind server socket!");
+    }
+
+
+    if (listen(serverSocket, MAXIMIUM_CLIENTS))
+        throw std::runtime_error("Can't listen this socket!");
+
+    if (fcntl(serverSocket, F_SETFL, fcntl(serverSocket, F_GETFL, 0) | O_NONBLOCK) == -1) {
+        throw std::runtime_error("Can't make server socket nonblock!");
+    }
+
+    pollfd me;
+    me.fd = serverSocket;
+    me.events = POLLIN;
+    pollDescryptors->reserve(MAXIMIUM_CLIENTS);
+    pollDescryptors->push_back(me);
 }
 
 
