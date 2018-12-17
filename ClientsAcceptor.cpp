@@ -29,7 +29,10 @@ static void registerForWrite(pollfd* fd) {
 
 static void removeFromPoll(std::vector<pollfd>::iterator* it) {
     if (close((*it)->fd)) {
+        std::cout << it << std::endl;
+        std::cout << (*it)->fd << std::endl;
         perror("close");
+        _exit(231);
     }
     (*it)->fd = -(*it)->fd;
 }
@@ -109,8 +112,10 @@ static void* writeToClient(void* arg) {
     if (requiredInfo->cacheLoaded->count(gettingPath)) {
         //проверяем, загружен ли кеш, если нет - выходим пока
         bool isCacheReady = (*requiredInfo->cacheLoaded)[gettingPath];
-        if (!isCacheReady)
+        if (!isCacheReady) {
+            std::cout << "cache not ready" << std::endl;
             return NULL;
+        }
         else {
             std::cout << "CACHE SIZE IS " << (*requiredInfo->cache)[gettingPath].size() << std::endl;
             ssize_t s = send(client->fd, &(*requiredInfo->cache)[gettingPath].front(),
@@ -167,6 +172,7 @@ static void* targetConnect(void* arg) {
 
     if (request.empty()) {
         std::cerr << "Mythical zalupa" << std::endl;
+        perror("wtf");
         removeFromPoll(requiredInfo->clientIterator);
         return NULL;
     }
@@ -343,7 +349,7 @@ static void* readFromServer(void* arg) {
                     for (int i = 0; i < serverError.size(); ++i) {
                         (*requiredInfo->dataPieces)[to].push_back(serverError[i]);
                     }
-                    break;
+                    return NULL;
                 case NoCache:
                     (*requiredInfo).cacheLoaded->erase((*requiredInfo->descsToPath)[addr].path);
                     break;
@@ -535,8 +541,8 @@ void ClientsAcceptor::pollManage() {
                                       &cacheLoaded, &cache);
                 writeToClient(&tgc);
             }
-            std::cout << "WOW";
         }
+//        std::cout << "finish work with "<<it->fd<<" "<<it->events<<" "<<it->revents<<std::endl;
     }
 
 
