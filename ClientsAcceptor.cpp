@@ -1,3 +1,5 @@
+#pragma clang diagnostic push
+#pragma ide diagnostic ignored "modernize-loop-convert"
 #pragma ide diagnostic ignored "modernize-use-auto"
 #pragma ide diagnostic ignored "modernize-use-nullptr"
 
@@ -84,7 +86,7 @@ ResponseParseStatus httpParseResponse(const char* response, size_t responseLen) 
     num_headers = sizeof(headers) / sizeof(headers[0]);
     pret = phr_parse_response(response, responseLen, &minor_version, &status, &message, &message_len,
                               headers, &num_headers, prevbuflen);
-    if (pret == -1)
+    if (pret == -1 or minor_version < 0)
         return Error;
     std::cout << "VERSION " << minor_version << " STATUS " << status << std::endl;
     return (status == 200) ? OK : NoCache;
@@ -103,8 +105,7 @@ static void* writeToClient(void* arg) {
         if (!isCacheReady) {
             std::cout << "cache not ready" << std::endl;
             return NULL;
-        }
-        else {
+        } else {
             std::cout << "CACHE SIZE IS " << (*requiredInfo->cache)[gettingPath].size() << std::endl;
             ssize_t s = send(client->fd, &(*requiredInfo->cache)[gettingPath].front(),
                              (*requiredInfo->cache)[gettingPath].size(), 0);
@@ -115,6 +116,9 @@ static void* writeToClient(void* arg) {
     else if (requiredInfo->dataPieces->count(client)) {
         std::cout << "DATA IS " << &(*requiredInfo->dataPieces)[client].front() << std::endl;
         std::cout << "DATA SIZE IS " << (*requiredInfo->dataPieces)[client].size() << std::endl;
+        if ((*requiredInfo->dataPieces)[client].empty()) {
+            std::cout << "a";
+        }
         ssize_t s = send(client->fd, &(*requiredInfo->dataPieces)[client].front(),
                          (*requiredInfo->dataPieces)[client].size(), 0);
         std::cout << "SENDED " << s << std::endl;
@@ -122,7 +126,7 @@ static void* writeToClient(void* arg) {
 
         //todo нет ни в дата сторе ни в кеше - дропнули клиента, который качал что-то большое, гыгы
     else {
-        std::cerr << "PIzDA TUT" << std::endl;
+        std::cout << "PIzDA TUT" << std::endl;
     }
     //
     removeFromPoll(requiredInfo->clientIterator);
@@ -153,7 +157,7 @@ static void* targetConnect(void* arg) {
     ConnectionInfo targetInfo;
 
     if (!httpParseRequest(request, &targetInfo)) {
-        std::cerr << "Invalid http request received!" << std::endl;
+        std::cout << "Invalid http request received!" << std::endl;
         removeFromPoll(requiredInfo->clientIterator);
         return NULL;
     }
@@ -162,7 +166,7 @@ static void* targetConnect(void* arg) {
         std::string notSupporting = "HTTP/1.1 405\r\n\r\nAllow: GET\r\n";
         send((*requiredInfo->clientIterator)->fd, notSupporting.c_str(), notSupporting.size(), 0);
         removeFromPoll(requiredInfo->clientIterator);
-        std::cerr << "Method not allowed!" << std::endl;
+//        std::cout << "Method not allowed!" << std::endl;
         return NULL;
     }
 
@@ -189,7 +193,7 @@ static void* targetConnect(void* arg) {
     sockaddr_in targetAddr;
 
     if (!addr) {
-        std::cerr << "Can't resolve host!" << std::endl;
+        std::cout << "Can't resolve host!" << std::endl;
         std::string notSupporting = "HTTP/1.1 523\r\n\r\n";
         send((*requiredInfo->clientIterator)->fd, notSupporting.c_str(), notSupporting.size(), 0);
         removeFromPoll(requiredInfo->clientIterator);
@@ -202,13 +206,13 @@ static void* targetConnect(void* arg) {
 
     int targetSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (targetSocket == -1) {
-        std::cerr << "Can't open target socket! Terminating" << std::endl;
+        std::cout << "Can't open target socket! Terminating" << std::endl;
         removeFromPoll(requiredInfo->clientIterator);
         return NULL;
     }
     fcntl(targetSocket, F_SETFL, fcntl(targetSocket, F_GETFL, 0) | O_NONBLOCK);
     if (connect(targetSocket, (sockaddr*) &targetAddr, sizeof(targetAddr)) != 0 and errno != EINPROGRESS) {
-        std::cerr << "Can't async connect to target! Terminating!" << std::endl;
+        std::cout << "Can't async connect to target! Terminating!" << std::endl;
         removeFromPoll(requiredInfo->clientIterator);
         return NULL;
     }
@@ -222,7 +226,6 @@ static void* targetConnect(void* arg) {
     *requiredInfo->clientIterator = requiredInfo->pollDescryptos->insert(requiredInfo->pollDescryptos->end(), target);
 
 
-
     pollfd* insertedAddress = &**requiredInfo->clientIterator;
     for (std::vector<pollfd>::iterator it = requiredInfo->pollDescryptos->begin();
          it != requiredInfo->pollDescryptos->end(); ++it) {
@@ -233,8 +236,7 @@ static void* targetConnect(void* arg) {
     }
 
     std::cout << "old " << oldClientAddress << " inserted " << insertedAddress << " insrted fd " << insertedAddress->fd
-              << std::endl;
-
+            << std::endl;
 
 
     for (int i = 0; i < request.size(); ++i) {
@@ -256,7 +258,7 @@ static void* readFromServer(void* arg) {
     pollfd* addr = &**requiredInfo->clientIterator;
     std::cout << "read from server" << std::endl;
     if (!requiredInfo->transferMap->count(addr)) {
-        std::cerr << "No client to write from server!" << std::endl;
+        std::cout << "No client to write from server!" << std::endl;
         removeFromPoll(requiredInfo->clientIterator);
         return NULL;
     }
@@ -352,6 +354,14 @@ static void* sendData(void* args) {
     std::cout << "with size " << size << std::endl;
     if (size == 0) {
         std::cout << "ZERO LENGTH SIZE WTF" << std::endl;
+        for (std::vector<pollfd>::iterator it = requiredInfo->pollDescryptors->begin();
+             it != requiredInfo->pollDescryptors->end(); ++it) {
+            if (&*it == requiredInfo->target) {
+                close(requiredInfo->target->fd);
+                requiredInfo->target->fd = -requiredInfo->target->fd;
+                return NULL;
+            }
+        }
     }
     std::cout << "I SENDIND THIS " << &(*requiredInfo->dataPieces)[requiredInfo->target][0] << std::endl;
     std::cout << "SENDING TO " << requiredInfo->target->fd << std::endl;
@@ -429,17 +439,30 @@ void ClientsAcceptor::pollManage() {
     pollfd c;
     c.fd = -1;
     c.events = POLLIN;
+    c.revents = 0;
 
 
-    poll(&(*pollDescryptors)[0], pollDescryptors->size(), 500);
+    poll(&(*pollDescryptors)[0], pollDescryptors->size(), POLL_DELAY);
+
+    std::cout << std::endl << std::cout << "AFTER POLL" << std::endl;
     for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
-        if (it->fd > 0 and it->revents & POLLIN) {
+        std::cout << it->fd << " " << it->events << " " << it->revents << std::endl;
+    }
+
+    for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
+        if (it->fd > 0 and it->revents & POLLERR) {
+            pollfd* client = (*transferMap)[&*it];
+            close(client->fd);
+            client->fd = (-client->fd);
+            removeFromPoll(&it);
+            std::cout << "REFUSED" << std::endl;
+        } else if (it->fd > 0 and it->revents & POLLIN) {
             //если слушающий сокет - принимаем соединения
             if (it->fd == serverSocket) {
                 ThreadRegisterInfo info(&serverSocket, &c);
                 acceptConnection(&info);
                 //если это клиент - коннектимся
-            } else if (!descsToPath.count(&*it)) {
+            } else if (!descsToPath.count(&*it) or descsToPath[&*it].isClient) {
                 TargetConnectInfo tgc(&serverSocket, &it, pollDescryptors, dataPieces, transferMap, &descsToPath,
                                       &cacheLoaded, &cache);
                 targetConnect(&tgc);
@@ -466,9 +489,7 @@ void ClientsAcceptor::pollManage() {
         pollDescryptors->push_back(c);
     }
 
-    if (pollDescryptors->size() > 50) {
-        std::cout << "hello" << std::endl;
-    }
+    removeDeadDescryptors();
 
 }
 
@@ -477,9 +498,60 @@ ClientsAcceptor::~ClientsAcceptor() {
     close(serverSocket);
 }
 
-void ClientsAcceptor::removeFromPoll() {
+void ClientsAcceptor::removeDeadDescryptors() {
+    std::vector<pollfd>* npollDescryptors = new std::vector<pollfd>;
+    npollDescryptors->reserve(MAXIMIUM_CLIENTS);
+
+    std::map<pollfd*, pollfd*>* ntransferPipes = new std::map<pollfd*, pollfd*>;
+    std::map<pollfd*, std::vector<char> >* ndataPieces = new std::map<pollfd*, std::vector<char> >;
+    std::map<pollfd*, pollfd*> oldNewMap;
+
+    for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
+        if (it->fd > 0) {
+            npollDescryptors->push_back(*it);
+            oldNewMap[&*it] = &npollDescryptors->back();
+        }
+    }
+
+
+    for (std::map<pollfd*, pollfd*>::iterator it = transferMap->begin(); it != transferMap->end(); ++it) {
+        if (it->second->fd > 0 and it->first->fd > 0) {
+            (*ntransferPipes)[oldNewMap[it->first]] = oldNewMap[it->second];
+            (*ntransferPipes)[oldNewMap[it->second]] = oldNewMap[it->first];
+        }
+    }
+
+
+    for (std::map<pollfd*, std::vector<char> >::iterator it = dataPieces->begin(); it != dataPieces->end(); ++it) {
+        if (it->first->fd > 0)
+            (*ndataPieces)[oldNewMap[it->first]] = it->second;
+    }
+
+    std::map<pollfd*, typeConnectionAndPath> newDescsToPath;
+    for (std::map<pollfd*, typeConnectionAndPath>::iterator it = descsToPath.begin(); it != descsToPath.end(); ++it) {
+        if (it->first->fd > 0) {
+            newDescsToPath[oldNewMap[it->first]] = it->second;
+        }
+    }
+    descsToPath.swap(newDescsToPath);
+    delete dataPieces;
+    dataPieces = ndataPieces;
+    delete transferMap;
+    transferMap = ntransferPipes;
+    delete pollDescryptors;
+    pollDescryptors = npollDescryptors;
+//    std::cout << "REBASED FINISHED with size " << pollDescryptors->size() << std::endl;
+//    std::cout << "DATA SIZE " << dataPieces->size() << std::endl;
+    for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
+        std::cout << &*it << std::endl;
+    }
+
+
+    if (pollDescryptors->size() == 2 and dataPieces->size() == 1) {
+        std::cout << "a";
+    }
 
 }
 
 
-
+#pragma clang diagnostic pop

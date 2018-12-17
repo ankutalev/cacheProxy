@@ -64,7 +64,7 @@ public:
 private:
     void pollManage();
 
-    void removeFromPoll();
+    void removeDeadDescryptors();
 
 private:
     int port;
