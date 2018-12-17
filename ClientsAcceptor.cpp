@@ -96,10 +96,9 @@ static void* writeToClient(void* arg) {
     pollfd* client = &**requiredInfo->clientIterator;
     std::string gettingPath = (*requiredInfo->descsToPath)[client].path;
     int g = client->fd;
-    //если есть в кеше
     std::cout << "SENDED TO CLIENT" << g << std::endl;
     if (requiredInfo->cacheLoaded->count(gettingPath)) {
-        //проверяем, загружен ли кеш, если нет - выходим пока
+        //п╣я│п╩п╦ п╣я│я┌я▄ п╡ п╨п╣я┬п╣ - я│п╪п╬я┌я─п╦п╪ п╫п╟ я┐я─п╬п╡п╣п╫я▄ п╥п╟п╨п╟я┤п╨п╦, п╣я│п╩п╦ пЁп╬я┌п╬п╡ - п╠п╣я─п╣п╪, п╫п╣ пЁп╬я┌п╬п╡ - п╡я▀п╡п╟п╩п╦п╡п╟п╣п╪я│я▐
         bool isCacheReady = (*requiredInfo->cacheLoaded)[gettingPath];
         if (!isCacheReady) {
             std::cout << "cache not ready" << std::endl;
@@ -109,21 +108,19 @@ static void* writeToClient(void* arg) {
             std::cout << "CACHE SIZE IS " << (*requiredInfo->cache)[gettingPath].size() << std::endl;
             ssize_t s = send(client->fd, &(*requiredInfo->cache)[gettingPath].front(),
                              (*requiredInfo->cache)[gettingPath].size(), 0);
-//            //perror("SEND");
             std::cout << "SENDED FROM CACHE" << s << std::endl;
         }
     }
-        //иначе проверяем дату, которая у нас есть
+        //п╫п╣я┌ п╡ п╨п╣я┬п╣ - п╠п╣я─п╣п╪ я│п╬п╬п╠я┴п╣п╫п╦п╣ п╦п╥ п╢п╟я┌п╟ я│я┌п╬я─п╟
     else if (requiredInfo->dataPieces->count(client)) {
         std::cout << "DATA IS " << &(*requiredInfo->dataPieces)[client].front() << std::endl;
         std::cout << "DATA SIZE IS " << (*requiredInfo->dataPieces)[client].size() << std::endl;
         ssize_t s = send(client->fd, &(*requiredInfo->dataPieces)[client].front(),
                          (*requiredInfo->dataPieces)[client].size(), 0);
         std::cout << "SENDED " << s << std::endl;
-//        //perror("after send");
     }
 
-        //иначе данные о кеше были удалены во время закачки (оборвалась клиентская сессия, качающая кеш, нужно отдельно мансить
+        //todo п╫п╣я┌ п╫п╦ п╡ п╢п╟я┌п╟ я│я┌п╬я─п╣ п╫п╦ п╡ п╨п╣я┬п╣ - п╢я─п╬п©п╫я┐п╩п╦ п╨п╩п╦п╣п╫я┌п╟, п╨п╬я┌п╬я─я▀п╧ п╨п╟я┤п╟п╩ я┤я┌п╬-я┌п╬ п╠п╬п╩я▄я┬п╬п╣, пЁя▀пЁя▀
     else {
         std::cerr << "PIzDA TUT" << std::endl;
     }
@@ -271,7 +268,7 @@ static void* readFromServer(void* arg) {
     std::fill(buffer, buffer + BUFFER_SIZE, 0);
     std::string response;
 
-    //todo сделать нормальное покусочное считывание
+    //todo я│я┤п╦я┌я▀п╡п╟п╫п╦п╣ п©п╬ п╨я┐я│п╨п╟п╪
     while (1) {
         ssize_t readed = recv(addr->fd, buffer, BUFFER_SIZE, 0);
         std::cout << readed << std::endl;
@@ -285,7 +282,7 @@ static void* readFromServer(void* arg) {
             return NULL;
         }
         (*requiredInfo->cacheLoaded)[(*requiredInfo->descsToPath)[addr].path] = false;
-        //считали все с сервера
+//        я│п╣я─п╡п╣я─ я─п╟п╥п╬я─п╡п╟п╩ я│п╬п╣п╢п╦п╫п╣п╫п╦п╣ - п╢п╬п╨п╟я┤п╟п╩п╦ п╡я│п╣
         if (!readed) {
             (*requiredInfo->cacheLoaded)[(*requiredInfo->descsToPath)[addr].path] = true;
             ResponseParseStatus status = httpParseResponse(&(*requiredInfo->dataPieces)[to].front(),
@@ -293,7 +290,7 @@ static void* readFromServer(void* arg) {
             std::string serverError = "HTTP/1.1 523\r\n\r\n";
             switch (status) {
                 case OK:
-                    //ок - записать в кеш, удлаить из сообщений
+                    //п╬п╨ - п╢п╬п╨п╟я┤п╟п╩п╦ п╡я│п╣, п╨п╩п╟п╢п╣п╪ п╡ п╨п╣я┬
                     (*requiredInfo->cache)[(*requiredInfo->descsToPath)[addr].path].swap(
                             (*requiredInfo->dataPieces)[to]);
                     requiredInfo->dataPieces->erase(to);
@@ -301,7 +298,7 @@ static void* readFromServer(void* arg) {
                     requiredInfo->transferMap->erase(addr);
                     break;
                 case Error:
-                    //ошибка при парсинге - удаляем всю информацию о том,что мы были на этой странице и закрываем соединение
+                    //п╫п╣п╨п╬я─я─п╣п╨я┌п╫я▀п╧ п╥п╟п©я─п╬я│ - я┐п╢п╟п╩я▐п╣п╪ п╡я│п╣ п╦п╫я└п╬я─п╪п╟я├п╦я▌ п╬ я│п╬п╣п╢п╦п╫п╣п╫п╦я▐я┘
                     (*requiredInfo->cacheLoaded).erase((*requiredInfo->descsToPath)[addr].path);
                     removeFromPoll(requiredInfo->clientIterator);
                     for (int i = 0; i < serverError.size(); ++i) {
@@ -345,23 +342,22 @@ static void* acceptConnection(void* args) {
 static void* sendData(void* args) {
 
     SendDataInfo* requiredInfo = (SendDataInfo*) args;
-    ssize_t sended = 0;
     if (!requiredInfo->dataPieces->count(requiredInfo->target)) {
-        std::cout << "NE ZNAU YEBTA" << std::endl;
+        std::cout << "Unknown client" << std::endl;
         close(requiredInfo->target->fd);
         requiredInfo->target->fd = -requiredInfo->target->fd;
         return NULL;
     }
     ssize_t size = (*requiredInfo->dataPieces)[requiredInfo->target].size();
-    std::cout << "wit size " << size << std::endl;
+    std::cout << "with size " << size << std::endl;
     if (size == 0) {
         std::cout << "ZERO LENGTH SIZE WTF" << std::endl;
     }
     std::cout << "I SENDIND THIS " << &(*requiredInfo->dataPieces)[requiredInfo->target][0] << std::endl;
     std::cout << "SENDING TO " << requiredInfo->target->fd << std::endl;
 
-    sended = send(requiredInfo->target->fd, &(*requiredInfo->dataPieces)[requiredInfo->target][0],
-                  (*requiredInfo->dataPieces)[requiredInfo->target].size(), 0);
+    send(requiredInfo->target->fd, &(*requiredInfo->dataPieces)[requiredInfo->target][0],
+         (*requiredInfo->dataPieces)[requiredInfo->target].size(), 0);
 
     requiredInfo->dataPieces->erase(requiredInfo->target);
     requiredInfo->target->events = POLLIN;
@@ -370,9 +366,6 @@ static void* sendData(void* args) {
 
 ClientsAcceptor::ClientsAcceptor() : pool(1) {
     port = DEFAULT_PORT;
-    clientSocket = -1;
-
-    CLIENT_SOCKET_SIZE = sizeof(clientAddr);
     serverSocket = socket(AF_INET, SOCK_STREAM, 0);
 
     pollDescryptors = new std::vector<pollfd>;
@@ -411,7 +404,6 @@ ClientsAcceptor::ClientsAcceptor() : pool(1) {
 
 ClientsAcceptor::ClientsAcceptor(int port) : port(port), pool(1) {
     serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-    CLIENT_SOCKET_SIZE = sizeof(clientAddr);
     if (serverSocket == -1)
         throw std::runtime_error("Can't open server socket!");
 
@@ -425,13 +417,7 @@ ClientsAcceptor::ClientsAcceptor(int port) : port(port), pool(1) {
 
     if (listen(serverSocket, MAXIMIUM_CLIENTS))
         throw std::runtime_error("Can't listen this socket!");
-
-
 }
-
-void removeFromPoll() {}
-
-void reBase() {}
 
 bool ClientsAcceptor::listenAndRegister() {
     while (1)
@@ -448,17 +434,17 @@ void ClientsAcceptor::pollManage() {
     poll(&(*pollDescryptors)[0], pollDescryptors->size(), 500);
     for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
         if (it->fd > 0 and it->revents & POLLIN) {
-            //если слушающий сокет  - принимаем конекшон
+            //п╣я│п╩п╦ я│п╩я┐я┬п╟я▌я┴п╦п╧ я│п╬п╨п╣я┌ - п©я─п╦п╫п╦п╪п╟п╣п╪ я│п╬п╣п╢п╦п╫п╣п╫п╦я▐
             if (it->fd == serverSocket) {
                 ThreadRegisterInfo info(&serverSocket, &c);
                 acceptConnection(&info);
-                //если сокет - клиент
+                //п╣я│п╩п╦ я█я┌п╬ п╨п╩п╦п╣п╫я┌ - п╨п╬п╫п╫п╣п╨я┌п╦п╪я│я▐
             } else if (!descsToPath.count(&*it)) {
                 TargetConnectInfo tgc(&serverSocket, &it, pollDescryptors, dataPieces, transferMap, &descsToPath,
                                       &cacheLoaded, &cache);
                 targetConnect(&tgc);
             }
-                //иначе  считываем инфу с сервера
+                //п╣я│п╩п╦ я│п╣я─п╡п╣я─ - я│я┤п╦я┌я▀п╡п╟п╣п╪ п╦п╫я└я┐
             else {
                 TargetConnectInfo tgc(&serverSocket, &it, pollDescryptors, dataPieces, transferMap, &descsToPath,
                                       &cacheLoaded, &cache);
@@ -489,6 +475,10 @@ void ClientsAcceptor::pollManage() {
 
 ClientsAcceptor::~ClientsAcceptor() {
     close(serverSocket);
+}
+
+void ClientsAcceptor::removeFromPoll() {
+
 }
 
 

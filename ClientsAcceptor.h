@@ -12,10 +12,8 @@
 
 struct ThreadRegisterInfo {
     ThreadRegisterInfo(int* d, pollfd* pd) : server(d), client(pd) {}
-
     int* server;
     pollfd* client;
-    std::set<pollfd*>* brokenDescryptors;
 };
 
 struct TargetConnectInfo {
@@ -69,18 +67,13 @@ private:
     void removeFromPoll();
 
 private:
-    int i;
     int port;
     int serverSocket;
-    int clientSocket;
-    std::map<int, ConnectionInfo> connections;
     struct sockaddr_in serverAddr, clientAddr;
-    int CLIENT_SOCKET_SIZE;
     const static int MAXIMIUM_CLIENTS = 2048;
     const static int DEFAULT_PORT = 8080;
     const static int POLL_DELAY = 3000;
     ThreadPool pool;
-
     std::map<std::string, std::vector<char> > cache;
     std::map<std::string, bool> cacheLoaded;
     std::vector<pollfd>* pollDescryptors;
