@@ -28,7 +28,9 @@ static void registerForWrite(pollfd* fd) {
 
 
 static void removeFromPoll(std::vector<pollfd>::iterator* it) {
-    close((*it)->fd);
+    if (close((*it)->fd)) {
+        perror("close");
+    }
     (*it)->fd = -(*it)->fd;
 }
 
@@ -44,7 +46,7 @@ bool httpParseRequest(std::string &req, ConnectionInfo* info) {
                              &minor_version, headers, &num_headers, prevbuflen);
     if (pret == -1)
         return false;
-    std::cout << "REQUESt IS" << req << std::endl;
+//    std::cout << "REQUESt IS" << req << std::endl;
     printf("request is %d bytes long\n", pret);
     info->method = method;
     info->method.erase(info->method.begin() + method_len, info->method.end());
@@ -101,8 +103,9 @@ static void* writeToClient(void* arg) {
     TargetConnectInfo* requiredInfo = (TargetConnectInfo*) arg;
     pollfd* client = &**requiredInfo->clientIterator;
     std::string gettingPath = (*requiredInfo->descsToPath)[client].path;
-
+    int g = client->fd;
     //если есть в кеше
+    std::cout << "SENDED TO CLIENT" << g << std::endl;
     if (requiredInfo->cacheLoaded->count(gettingPath)) {
         //проверяем, загружен ли кеш, если нет - выходим пока
         bool isCacheReady = (*requiredInfo->cacheLoaded)[gettingPath];
@@ -114,7 +117,7 @@ static void* writeToClient(void* arg) {
                              (*requiredInfo->cache)[gettingPath].size(), 0);
             perror("SEND");
             std::cout << "SENDED FROM CACHE" << s << std::endl;
-            if (s == 0) {
+            if (s == 5962) {
                 std::cout << "AAAA???" << std::endl;
             }
         }
@@ -126,16 +129,24 @@ static void* writeToClient(void* arg) {
         ssize_t s = send(client->fd, &(*requiredInfo->dataPieces)[client].front(),
                          (*requiredInfo->dataPieces)[client].size(), 0);
         std::cout << "SENDED " << s << std::endl;
-
+        perror("after send");
     }
+
         //иначе данные о кеше были удалены во время закачки (оборвалась клиентская сессия, качающая кеш, нужно отдельно мансить
     else {
+        //tut bil
         std::cerr << "PIzDA TUT";
     }
     //
     removeFromPoll(requiredInfo->clientIterator);
     std::cerr << "SENDED!!!";
+    if (errno == EINVAL) {
+        std::cout << "ewe zagadochney" << std::endl;
+    }
     perror("what");
+    if (errno == EINPROGRESS) {
+        std::cerr << "Da nu nhauy" << std::endl;
+    }
     return NULL;
 }
 
@@ -223,14 +234,25 @@ static void* targetConnect(void* arg) {
         removeFromPoll(requiredInfo->clientIterator);
         return NULL;
     }
+    std::cout << "AND MY TARGET IS " << targetSocket << std::endl;
 
 
     pollfd target;
     target.fd = targetSocket;
     target.events = POLLOUT;
+    target.revents = 0;
+    *requiredInfo->clientIterator = requiredInfo->pollDescryptos->insert(requiredInfo->pollDescryptos->end(), target);
 
-    *requiredInfo->clientIterator = requiredInfo->pollDescryptos->insert(*requiredInfo->clientIterator + 1, target);
+
+
     pollfd* insertedAddress = &**requiredInfo->clientIterator;
+    for (std::vector<pollfd>::iterator it = requiredInfo->pollDescryptos->begin();
+         it != requiredInfo->pollDescryptos->end(); ++it) {
+        if (&*it == oldClientAddress) {
+            *requiredInfo->clientIterator = it;
+            break;
+        }
+    }
 
     std::cout << "old " << oldClientAddress << " inserted " << insertedAddress << " insrted fd " << insertedAddress->fd
               << std::endl;
@@ -254,6 +276,12 @@ static void* targetConnect(void* arg) {
 static void* readFromServer(void* arg) {
     TargetConnectInfo* requiredInfo = (TargetConnectInfo*) arg;
     pollfd* addr = &**requiredInfo->clientIterator;
+
+    char tmp = 1;
+//    if (getsockopt(addr->fd,SOL_SOCKET,SO_ERROR,&tmp,(socklen_t*) sizeof(tmp))) {
+//        perror("NE VERU!");
+//        return NULL;
+//    }
 
     std::cout << "read from server" << std::endl;
     if (!requiredInfo->transferMap->count(addr)) {
@@ -280,6 +308,12 @@ static void* readFromServer(void* arg) {
         if (readed == -1 and errno != EWOULDBLOCK) {
             //huynya proizoshla
             perror("HUYNYA");
+            _exit(9);
+            int a = to->fd;
+            int b = to->events;
+            int c = to->revents;
+            std::cout << to << " " << to->fd << " " << to->events << " " << to->revents << std::endl;
+            std::cout << "AA???" << std::endl;
         }
         (*requiredInfo->cacheLoaded)[(*requiredInfo->descsToPath)[addr].path] = false;
         //считали все с сервера
@@ -333,7 +367,7 @@ static void* acceptConnection(void* args) {
     sockaddr_in addr;
     size_t addSize = sizeof(addr);
     int newClient = accept(*descs->server, (sockaddr*) &addr, (socklen_t*) &addSize);
-
+    std::cout << "I ACCEPTED NEW CLIENT AND FD IS " << newClient << std::endl;
 
     if (newClient == -1) {
         throw std::runtime_error("can't accept!");
@@ -348,18 +382,28 @@ static void* sendData(void* args) {
 
     SendDataInfo* requiredInfo = (SendDataInfo*) args;
     ssize_t sended = 0;
+    if (!requiredInfo->dataPieces->count(requiredInfo->target)) {
+        std::cout << "NE ZNAU YEBTA" << std::endl;
+        close(requiredInfo->target->fd);
+        requiredInfo->target->fd = -requiredInfo->target->fd;
+        return NULL;
+    }
     ssize_t size = (*requiredInfo->dataPieces)[requiredInfo->target].size();
+    std::cout << "wit size " << size << std::endl;
+    if (size == 0) {
+        std::cout << "ZERO LENGTH SIZE WTF" << std::endl;
+    }
+    std::cout << "I SENDIND THIS " << &(*requiredInfo->dataPieces)[requiredInfo->target][0] << std::endl;
+    std::cout << "SENDING TO " << requiredInfo->target->fd << std::endl;
 
-    std::cout << "I SENDIND THIS" << &(*requiredInfo->dataPieces)[requiredInfo->target][0] << std::endl;
-
-
-    do {
+//    do {
         sended = send(requiredInfo->target->fd, &(*requiredInfo->dataPieces)[requiredInfo->target][0],
                       (*requiredInfo->dataPieces)[requiredInfo->target].size(), 0);
-        (*requiredInfo->dataPieces)[requiredInfo->target].erase(
-                (*requiredInfo->dataPieces)[requiredInfo->target].begin(),
-                (*requiredInfo->dataPieces)[requiredInfo->target].begin() + sended);
-    } while (sended > 0);
+//        (*requiredInfo->dataPieces)[requiredInfo->target].erase(
+//                (*requiredInfo->dataPieces)[requiredInfo->target].begin(),
+//                (*requiredInfo->dataPieces)[requiredInfo->target].begin() + sended);
+    std::cout << "here" << std::endl;
+//    } while (sended > 0);
 
     requiredInfo->dataPieces->erase(requiredInfo->target);
     requiredInfo->target->events = POLLIN;
@@ -442,13 +486,23 @@ void ClientsAcceptor::pollManage() {
     c.fd = -1;
     c.events = POLLIN;
 
+
     poll(&(*pollDescryptors)[0], pollDescryptors->size(), 500);
 
+//    std::cout<<"BEFORE POLL HANDLING"<<std::endl;
+//    for (int j = 0; j < pollDescryptors->size(); ++j) {
+//        std::cout << (*pollDescryptors)[j].fd << " " << (*pollDescryptors)[j].events << " "
+//                  << (*pollDescryptors)[j].revents << std::endl;
+//    }
 
+
+
+
+    bool wasConnectedToTarget = false;
     for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
 
-        std::cout << "NOW WORK WITH DESCR" << it->fd << " AND EVENTS " << it->events << "AND REVENTS " << it->revents
-                  << std::endl;
+//        std::cout << "NOW WORK WITH DESCR" << it->fd << " AND EVENTS " << it->events << "AND REVENTS " << it->revents
+//                  << std::endl;
 
         if (it->fd > 0 and it->revents & POLLIN) {
             //если слушающий сокет  - принимаем конекшон
@@ -468,9 +522,9 @@ void ClientsAcceptor::pollManage() {
                 readFromServer(&tgc);
             }
 
-        } else if (it->revents & POLLOUT) {
-            SendDataInfo sdi(&*it, dataPieces, pollDescryptors);
+        } else if (it->revents & POLLOUT and it->fd > 0) {
             if (!descsToPath[&*it].isClient) {
+                SendDataInfo sdi(&*it, dataPieces, pollDescryptors);
                 sendData(&sdi);
                 std::cout << "vislal na server!" << std::endl;
             } else {
@@ -483,10 +537,13 @@ void ClientsAcceptor::pollManage() {
         }
     }
 
-    for (int j = 0; j < pollDescryptors->size(); ++j) {
-        std::cout << (*pollDescryptors)[j].fd << " " << (*pollDescryptors)[j].events << " "
-                  << (*pollDescryptors)[j].revents << std::endl;
-    }
+
+//    std::cout<<"AFTER POLL HANDLING"<<std::endl;
+//    for (int j = 0; j < pollDescryptors->size(); ++j) {
+//        std::cout << (*pollDescryptors)[j].fd << " " << (*pollDescryptors)[j].events << " "
+//                  << (*pollDescryptors)[j].revents << std::endl;
+//    }
+
 
 
 //    if (pollDescryptors->size() > 10)

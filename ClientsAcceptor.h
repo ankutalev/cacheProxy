@@ -76,7 +76,7 @@ private:
     std::map<int, ConnectionInfo> connections;
     struct sockaddr_in serverAddr, clientAddr;
     int CLIENT_SOCKET_SIZE;
-    const static int MAXIMIUM_CLIENTS = 1024;
+    const static int MAXIMIUM_CLIENTS = 2048;
     const static int DEFAULT_PORT = 8080;
     const static int POLL_DELAY = 3000;
     ThreadPool pool;
