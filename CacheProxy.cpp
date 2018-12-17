@@ -488,12 +488,15 @@ void CacheProxy::removeDeadDescryptors() {
         }
     }
     descsToPath.swap(newDescsToPath);
-    delete dataPieces;
-    dataPieces = ndataPieces;
-    delete transferMap;
-    transferMap = ntransferPipes;
-    delete pollDescryptors;
-    pollDescryptors = npollDescryptors;
+
+    dataPieces->swap(*ndataPieces);
+    delete ndataPieces;
+
+    transferMap->swap(*ntransferPipes);
+    delete (ntransferPipes);
+
+    pollDescryptors->swap(*npollDescryptors);
+    delete npollDescryptors;
     for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
         std::cout << &*it << std::endl;
     }
