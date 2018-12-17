@@ -221,12 +221,14 @@ static void* targetConnect(void* arg) {
     targetAddr.sin_family = AF_INET;
     targetAddr.sin_port = htons(80);
 
-    int targetSocket = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    int targetSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (targetSocket == -1) {
         std::cerr << "Can't open target socket! Terminating" << std::endl;
         removeFromPoll(requiredInfo->clientIterator);
         return NULL;
     }
+    fcntl(targetSocket, F_SETFL, fcntl(targetSocket, F_GETFL, 0) | O_NONBLOCK);
+
 
 
     if (connect(targetSocket, (sockaddr*) &targetAddr, sizeof(targetAddr)) != 0 and errno != EINPROGRESS) {
