@@ -11,7 +11,7 @@ bool httpParseRequest(std::string &req, RequestInfo* info) {
     num_headers = sizeof(headers) / sizeof(headers[0]);
     pret = phr_parse_request(req.c_str(), req.size(), &method, &method_len, &path, &path_len,
                              &minor_version, headers, &num_headers, prevbuflen);
-    if (pret == -1)
+    if (pret < -1)
         return false;
     info->method = method;
     info->method.erase(info->method.begin() + method_len, info->method.end());

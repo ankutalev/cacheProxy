@@ -5,8 +5,11 @@
 #include <iostream>
 #include <unistd.h>
 #include <netdb.h>
+#include <errno.h>
+#include <cstdio>
 #include "utils.h"
 #include "RequestInfo.h"
+#include "fcntl.h"
 
 void MultyThreadedCacheProxy::init(int port) {
     serverSocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -60,40 +63,64 @@ static void* workerBody(void* arg) {
     std::fill(buffer, buffer + BUFFER_SIZE, 0);
     ssize_t readed = -1;
     std::string request;
-    do {
+    fcntl(info->fd, F_SETFL, fcntl(info->fd, F_GETFL, 0) | O_NONBLOCK);
+    pollfd pollStruct;
+    pollStruct.fd = info->fd;
+    pollStruct.events = POLLIN;
+    pollStruct.revents = 0;
+    static const int POLL_DELAY = 5000;
+    if (!poll(&pollStruct, 1, POLL_DELAY)) {
+        std::cout << "Client not ready too long, closing connection" << std::endl;
+        close(info->fd);
+        return NULL;
+    }
         readed = recv(info->fd, buffer, BUFFER_SIZE - 1, 0);
+    if (readed == -1) {
+        perror("read");
+    } else {
         buffer[readed] = 0;
         request += buffer;
-    } while (readed == BUFFER_SIZE);
-    RequestInfo headers;
+        std::cout << "readed " << readed << std::endl;
+    }
 
+    RequestInfo headers;
     if (!httpParseRequest(request, &headers)) {
         std::cout << "Invalid http request received!" << std::endl;
         close(info->fd);
         return NULL;
     }
+    std::cout << "Request's size" << request.size() << std::endl;
+    std::cout << "my request is " << request << std::endl;
 
     if (headers.method != "GET" and headers.method != "HEAD") {
         std::string notSupporting = "HTTP/1.1 405\r\n\r\nAllow: GET\r\n";
-        send(info->fd, notSupporting.c_str(), notSupporting.size(), 0);
+        std::cout << "sended " << send(info->fd, notSupporting.c_str(), notSupporting.size(), 0);
         close(info->fd);
+
         return NULL;
     }
 
     pthread_mutex_lock(info->loadedMutex);
     unsigned long areCachePageExists = info->cacheLoaded->count(headers.path);
     pthread_mutex_unlock(info->loadedMutex);
+    std::cout << "Are cache exists? " << areCachePageExists << std::endl;
 
     if (areCachePageExists) {
         pthread_mutex_lock(info->loadedMutex);
-        while (not(*info->cacheLoaded)[headers.path])
+        while (not(*info->cacheLoaded)[headers.path]) {
+            std::cout << "sleepy for " << headers.path << std::endl;
             pthread_cond_wait(info->cv, info->loadedMutex);
+        }
         areCachePageExists = info->cacheLoaded->count(headers.path);
         if (areCachePageExists) {
             pthread_mutex_unlock(info->loadedMutex);
-            send(info->fd, &(*info->cache)[headers.path].front(), (*info->cache)[headers.path].size(), 0);
+            std::cout << "sended from cahce "
+                      << send(info->fd, &(*info->cache)[headers.path].front(), (*info->cache)[headers.path].size(), 0)
+                      << std::endl;
+            close(info->fd);
             return NULL;
         }
+        std::cout << "cache ischez = (" << std::endl;
         pthread_mutex_unlock(info->loadedMutex);
     }
 
@@ -107,7 +134,6 @@ static void* workerBody(void* arg) {
     addrinfo* addr = NULL;
     getaddrinfo(headers.host.c_str(), NULL, &hints, &addr);
     sockaddr_in targetAddr;
-
     if (!addr) {
         std::cout << "Can't resolve host!" << std::endl;
         std::string notSupporting = "HTTP/1.1 523\r\n\r\n";
@@ -133,7 +159,8 @@ static void* workerBody(void* arg) {
         return NULL;
     }
 
-    if (send(server, request.c_str(), request.size(), 0) == -1) {
+    ssize_t sended = 0;
+    if ((sended = send(server, request.c_str(), request.size(), 0)) == -1) {
         std::cout << "Can't send  request to target! Terminating!" << std::endl;
         close(info->fd);
         close(server);
@@ -152,10 +179,11 @@ static void* workerBody(void* arg) {
         for (int i = 0; i < readed; ++i) {
             response.push_back(buffer[i]);
         }
-    } while (readed == BUFFER_SIZE);
+    } while (readed > 0);
     close(server);
-
     ResponseParseStatus status = httpParseResponse(&response[0], response.size());
+
+
     std::string serverError = "HTTP/1.1 523\r\n\r\n";
 
     switch (status) {
@@ -167,6 +195,7 @@ static void* workerBody(void* arg) {
             pthread_mutex_unlock(info->loadedMutex);
             break;
         case Error: {
+            std::cout << "CACHE ERASED" << std::endl;
             pthread_mutex_lock(info->loadedMutex);
             info->cacheLoaded->erase(headers.path);
             pthread_cond_signal(info->cv);
@@ -177,14 +206,20 @@ static void* workerBody(void* arg) {
         }
         default:
         case NoCache:
+            pthread_mutex_lock(info->loadedMutex);
+            info->cacheLoaded->erase(headers.path);
+            pthread_cond_signal(info->cv);
+            pthread_mutex_unlock(info->loadedMutex);
             send(info->fd, &response[0], response.size(), 0);
             close(info->fd);
             return NULL;
     }
 
-    (*info->cache)[headers.path].swap(response);
-    send(info->fd, &(*info->cache)[headers.path].front(), (*info->cache)[headers.path].size(), 0);
-
+    std::cout << "cache size " << (*info->cache)[headers.path].size() << std::endl;
+    std::cout << "sended from cache"
+              << send(info->fd, &(*info->cache)[headers.path].front(), (*info->cache)[headers.path].size(), 0)
+              << std::endl;
+    close(info->fd);
     return NULL;
 }
 
@@ -192,16 +227,21 @@ static void* workerBody(void* arg) {
 void MultyThreadedCacheProxy::startWorking() {
     sockaddr_in clientAddr;
     size_t addrSize = sizeof(clientAddr);
+    std::vector<RequiredInfo> infos;
+    infos.reserve(MAXIMIUM_CLIENTS);
     while (1) {
+        std::cout << "wait for aceptr" << std::endl;
         int client = accept(serverSocket, (sockaddr*) &clientAddr, (socklen_t*) &addrSize);
         pthread_t thread;
         RequiredInfo info;
+        std::cout << "I ACCEPT THREAD " << client << std::endl;
         info.loadedMutex = &loadedMutex;
         info.cv = &cv;
         info.cacheLoaded = &cacheLoaded;
         info.cache = &cache;
         info.fd = client;
-        if (pthread_create(&thread, NULL, workerBody, &info)) {
+        infos.push_back(info);
+        if (pthread_create(&thread, NULL, workerBody, &*(infos.end() - 1))) {
             std::cerr << "CAN' T CREATE THREAD " << std::endl;
             close(client);
         }

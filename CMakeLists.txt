@@ -3,6 +3,8 @@ project(cashProxy)
 
 set(CMAKE_CXX_STANDARD 98)
 add_definitions("-Wall  -pedantic")
-add_executable(cashProxy main.cpp picohttpparser/picohttpparser.h picohttpparser/picohttpparser.c CacheProxy.cpp ThreadPool.cpp ThreadPool.h MultyThreadedCacheProxy.cpp MultyThreadedCacheProxy.h utils.cpp utils.h)
+add_executable(cashProxy proxy.cpp picohttpparser/picohttpparser.h picohttpparser/picohttpparser.c CacheProxy.cpp ThreadPool.cpp ThreadPool.h utils.cpp utils.h mtProxy.cpp)
+add_executable(mtCacheProxy mtProxy.cpp picohttpparser/picohttpparser.h picohttpparser/picohttpparser.c MultyThreadedCacheProxy.cpp MultyThreadedCacheProxy.h utils.cpp utils.h)
+
 target_link_libraries(cashProxy "pthread")
-add_executable(client client.cpp)
+target_link_libraries(mtCacheProxy "pthread")
