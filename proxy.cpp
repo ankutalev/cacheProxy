@@ -1,6 +1,5 @@
 #include <iostream>
 #include "CacheProxy.h"
-#include "ThreadPool.h"
 #include <unistd.h>
 #include <netdb.h>
 #include <cstring>

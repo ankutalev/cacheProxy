@@ -321,11 +321,11 @@ static void* sendData(void* args) {
     return NULL;
 }
 
-CacheProxy::CacheProxy() : pool(1) {
+CacheProxy::CacheProxy() {
     init(DEFAULT_PORT);
 }
 
-CacheProxy::CacheProxy(int port) : port(port), pool(1) {
+CacheProxy::CacheProxy(int port) : port(port) {
     init(port);
 }
 
