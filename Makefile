@@ -1,3 +1,5 @@
+all: cashProxy mtCacheProxy
+
 cashProxy:
         g++ proxy.cpp CacheProxy.cpp ulits.cpp picohttpparser/picohttpparser.c -o cashProxy -lsocket -lnsl
 mtCacheProxy:
