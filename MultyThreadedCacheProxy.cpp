@@ -55,6 +55,29 @@ struct RequiredInfo {
     pthread_cond_t* cv;
 };
 
+bool sendData(int fd, const char* what, ssize_t dataLen) {
+    pollfd pollf;
+    pollf.fd = fd;
+    pollf.events = POLLOUT;
+    pollf.revents = 0;
+    static const int POLL_DELAY = 5000;
+    ssize_t left = dataLen;
+    ssize_t sended = 0;
+    ssize_t total = 0;
+    while (left) {
+        if (!poll(&pollf, 1, POLL_DELAY)) {
+            std::cout << "CLIENT NOT AVAILABLE TO WRITE TOO LONG, close session" << std::endl;
+            return false;
+        }
+        sended = send(fd, what + total, left, 0);
+        left -= sended;
+        total += sended;
+    }
+    return true;
+}
+
+
+
 
 static void* workerBody(void* arg) {
     RequiredInfo* info = (RequiredInfo*) arg;
@@ -74,7 +97,7 @@ static void* workerBody(void* arg) {
         close(info->fd);
         return NULL;
     }
-        readed = recv(info->fd, buffer, BUFFER_SIZE - 1, 0);
+    readed = recv(info->fd, buffer, BUFFER_SIZE - 1, 0);
     if (readed == -1) {
         perror("read");
     } else {
@@ -94,9 +117,8 @@ static void* workerBody(void* arg) {
 
     if (headers.method != "GET" and headers.method != "HEAD") {
         std::string notSupporting = "HTTP/1.1 405\r\n\r\nAllow: GET\r\n";
-        std::cout << "sended " << send(info->fd, notSupporting.c_str(), notSupporting.size(), 0);
+        sendData(info->fd, notSupporting.c_str(), notSupporting.size());
         close(info->fd);
-
         return NULL;
     }
 
@@ -114,23 +136,13 @@ static void* workerBody(void* arg) {
         areCachePageExists = info->cacheLoaded->count(headers.path);
         if (areCachePageExists) {
             pthread_mutex_unlock(info->loadedMutex);
-		ssize_t total = 0;
-		ssize_t left = (*info->cache)[headers.path].size();
-	    while(left) {
-                      ssize_t s = send(info->fd, &(*info->cache)[headers.path].front()+total,left, 0);
-		      if (s==-1)
-				continue;
-		total+=s;
-		left-=s;
-		}
+            sendData(info->fd, &(*info->cache)[headers.path].front(), (*info->cache)[headers.path].size());
             close(info->fd);
             return NULL;
         }
-
         std::cout << "cache ischez = (" << std::endl;
         pthread_mutex_unlock(info->loadedMutex);
     }
-
 
     addrinfo hints = {0};
     hints.ai_flags = 0;
@@ -141,10 +153,11 @@ static void* workerBody(void* arg) {
     addrinfo* addr = NULL;
     getaddrinfo(headers.host.c_str(), NULL, &hints, &addr);
     sockaddr_in targetAddr;
+
     if (!addr) {
         std::cout << "Can't resolve host!" << std::endl;
         std::string notSupporting = "HTTP/1.1 523\r\n\r\n";
-        send(info->fd, notSupporting.c_str(), notSupporting.size(), 0);
+        sendData(info->fd, notSupporting.c_str(), notSupporting.size());
         close(info->fd);
         return NULL;
     }
@@ -165,9 +178,7 @@ static void* workerBody(void* arg) {
         close(info->fd);
         return NULL;
     }
-
-    ssize_t sended = 0;
-    if ((sended = send(server, request.c_str(), request.size(), 0)) == -1) {
+    if (!sendData(server, request.c_str(), request.size())) {
         std::cout << "Can't send  request to target! Terminating!" << std::endl;
         close(info->fd);
         close(server);
@@ -207,7 +218,7 @@ static void* workerBody(void* arg) {
             info->cacheLoaded->erase(headers.path);
             pthread_cond_signal(info->cv);
             pthread_mutex_unlock(info->loadedMutex);
-            send(info->fd, serverError.c_str(), serverError.size(), 0);
+            sendData(info->fd, serverError.c_str(), serverError.size());
             close(info->fd);
             return NULL;
         }
@@ -217,29 +228,11 @@ static void* workerBody(void* arg) {
             info->cacheLoaded->erase(headers.path);
             pthread_cond_signal(info->cv);
             pthread_mutex_unlock(info->loadedMutex);
-	    ssize_t total = 0;
-	    ssize_t left = response.size();
-             while(left) {
-              ssize_t s = send(info->fd, &response[0]+total, left, 0);
-                if (s==-1) {
-                        continue;
-                }
-                left-=s;
-                total+=s;
-	    }           
-	    close(info->fd);
+            sendData(info->fd, &response[0], response.size());
+            close(info->fd);
             return NULL;
     }
-	ssize_t total = 0;
-	ssize_t left = (*info->cache)[headers.path].size();
-	while(left) {
-              ssize_t s = send(info->fd, &(*info->cache)[headers.path].front()+total, left, 0);
-		if (s==-1) {
-			continue;
-		}
-		left-=s;
-		total+=s;
-	}
+    sendData(info->fd, &(*info->cache)[headers.path].front(), (*info->cache)[headers.path].size());
     close(info->fd);
     return NULL;
 }
