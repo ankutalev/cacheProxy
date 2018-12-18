@@ -21,7 +21,7 @@ private:
 private:
     int serverSocket;
     const static int MAXIMIUM_CLIENTS = 2048;
-    const static int DEFAULT_PORT = 8080;
+    const static int DEFAULT_PORT = 8081;
     sockaddr_in serverAddr;
     std::map<std::string, std::vector<char> > cache;
     std::map<std::string, bool> cacheLoaded;

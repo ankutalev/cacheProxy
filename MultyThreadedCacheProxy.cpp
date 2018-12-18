@@ -20,7 +20,7 @@ void MultyThreadedCacheProxy::init(int port) {
     if (serverSocket == -1)
         throw std::runtime_error("Can't open server socket!");
 
-    serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    serverAddr.sin_addr.s_addr = htonl(INADDR_ANY);
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(port);
 
@@ -114,12 +114,19 @@ static void* workerBody(void* arg) {
         areCachePageExists = info->cacheLoaded->count(headers.path);
         if (areCachePageExists) {
             pthread_mutex_unlock(info->loadedMutex);
-            std::cout << "sended from cahce "
-                      << send(info->fd, &(*info->cache)[headers.path].front(), (*info->cache)[headers.path].size(), 0)
-                      << std::endl;
+		ssize_t total = 0;
+		ssize_t left = (*info->cache)[headers.path].size();
+	    while(left) {
+                      ssize_t s = send(info->fd, &(*info->cache)[headers.path].front()+total,left, 0);
+		      if (s==-1)
+				continue;
+		total+=s;
+		left-=s;
+		}
             close(info->fd);
             return NULL;
         }
+
         std::cout << "cache ischez = (" << std::endl;
         pthread_mutex_unlock(info->loadedMutex);
     }
@@ -210,15 +217,29 @@ static void* workerBody(void* arg) {
             info->cacheLoaded->erase(headers.path);
             pthread_cond_signal(info->cv);
             pthread_mutex_unlock(info->loadedMutex);
-            send(info->fd, &response[0], response.size(), 0);
-            close(info->fd);
+	    ssize_t total = 0;
+	    ssize_t left = response.size();
+             while(left) {
+              ssize_t s = send(info->fd, &response[0]+total, left, 0);
+                if (s==-1) {
+                        continue;
+                }
+                left-=s;
+                total+=s;
+	    }           
+	    close(info->fd);
             return NULL;
     }
-
-    std::cout << "cache size " << (*info->cache)[headers.path].size() << std::endl;
-    std::cout << "sended from cache"
-              << send(info->fd, &(*info->cache)[headers.path].front(), (*info->cache)[headers.path].size(), 0)
-              << std::endl;
+	ssize_t total = 0;
+	ssize_t left = (*info->cache)[headers.path].size();
+	while(left) {
+              ssize_t s = send(info->fd, &(*info->cache)[headers.path].front()+total, left, 0);
+		if (s==-1) {
+			continue;
+		}
+		left-=s;
+		total+=s;
+	}
     close(info->fd);
     return NULL;
 }

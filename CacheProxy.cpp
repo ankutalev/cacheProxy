@@ -12,10 +12,12 @@
 #include <poll.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <sys/time.h>
 #include "CacheProxy.h"
 #include "utils.h"
 
-
+int count = 0;
+double timeR = 0;
 
 static void registerForWrite(std::vector<pollfd>::iterator* it) {
     (*it)->events = POLLOUT;
@@ -52,10 +54,19 @@ static void* writeToClient(void* arg) {
             return NULL;
         } else {
             std::cout << "CACHE SIZE IS " << (*requiredInfo->cache)[gettingPath].size() << std::endl;
-            ssize_t s = send(client->fd, &(*requiredInfo->cache)[gettingPath].front(),
-                             (*requiredInfo->cache)[gettingPath].size(), 0);
-            std::cout << "SENDED FROM CACHE" << s << std::endl;
-        }
+		ssize_t total = 0;
+		ssize_t left = (*requiredInfo->cache)[gettingPath].size();
+		 while(total < (*requiredInfo->cache)[gettingPath].size()) {
+        	         ssize_t s = send(client->fd, &(*requiredInfo->cache)[gettingPath].front()+total,left, 0);
+			if (s == -1) {
+				//std::cout<<"che?"<<std::endl;
+				continue;
+			}
+	  		 left-=s;
+            		std::cout << "SENDED FROM CACHE" << s << std::endl;
+	 		total+=s;
+        	}
+	}
     }
         //нет в кеше - берем сообщение из дата стора
     else if (requiredInfo->dataPieces->count(client)) {
@@ -64,9 +75,12 @@ static void* writeToClient(void* arg) {
         if ((*requiredInfo->dataPieces)[client].empty()) {
             std::cout << "a";
         }
+	while(not (*requiredInfo->dataPieces)[client].empty()) {
         ssize_t s = send(client->fd, &(*requiredInfo->dataPieces)[client].front(),
                          (*requiredInfo->dataPieces)[client].size(), 0);
+	(*requiredInfo->dataPieces)[client].erase((*requiredInfo->dataPieces)[client].begin(),(*requiredInfo->dataPieces)[client].begin()+s);
         std::cout << "SENDED " << s << std::endl;
+}
     }
 
 
@@ -134,7 +148,23 @@ static void* targetConnect(void* arg) {
     hints.ai_protocol = IPPROTO_TCP;
 
     addrinfo* addr = NULL;
-    getaddrinfo(targetInfo.host.c_str(), NULL, &hints, &addr);
+    std::cout<<"\n\n\n RESOLVING NAME "<<std::endl;
+	struct timeval tval_before, tval_after, tval_result;
+
+        gettimeofday(&tval_before, NULL);
+ 	getaddrinfo(targetInfo.host.c_str(), NULL, &hints, &addr);
+	gettimeofday(&tval_after, NULL);
+
+//timersub(&tval_after, &tval_before, &tval_result);
+	tval_result.tv_sec = tval_after.tv_sec - tval_before.tv_sec;
+	tval_result.tv_usec= tval_after.tv_usec - tval_before.tv_usec;
+	double kek = tval_before.tv_sec+ 0.000001* tval_before.tv_usec;
+	double lol =  tval_after.tv_sec+ 0.000001* tval_after.tv_usec;
+
+	timeR+=(lol-kek);
+printf("Time elapsed: %ld.%06ld\n", (long int)tval_result.tv_sec, (long int)tval_result.tv_usec);
+	count+=1;
+   // std::cout<<"\n\n RESOLVE FINISHED with time "<<time<<std::endl;
     sockaddr_in targetAddr;
 
     if (!addr) {
@@ -341,6 +371,7 @@ void CacheProxy::pollManage() {
     c.events = POLLIN;
     c.revents = 0;
 
+	std::cout<<"RESOLVE MEAN TIME "<< timeR/count <<" and count is"<< count<<std::endl;
 
     poll(&(*pollDescryptors)[0], pollDescryptors->size(), POLL_DELAY);
 
@@ -462,7 +493,7 @@ void CacheProxy::init(int port) {
     if (serverSocket == -1)
         throw std::runtime_error("Can't open server socket!");
 
-    serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    serverAddr.sin_addr.s_addr = htonl(INADDR_ANY);
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(port);
 
