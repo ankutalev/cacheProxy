@@ -128,7 +128,7 @@ static void* workerBody(void* arg) {
     pthread_mutex_lock(info->loadedMutex);
     unsigned long areCachePageExists = info->cacheLoaded->count(headers.path);
     pthread_mutex_unlock(info->loadedMutex);
-    std::cout << "Are cache exists? " << areCachePageExists << std::endl;
+    std::cout << "Are cache exists? " << areCachePageExists << "for " << headers.path << std::endl;
 
     if (areCachePageExists) {
         pthread_mutex_lock(info->loadedMutex);
@@ -210,6 +210,7 @@ static void* workerBody(void* arg) {
     switch (status) {
         case OK:
             pthread_mutex_lock(info->loadedMutex);
+            std::cout << "sen cache for " << headers.path << " as ready" << std::endl;
             (*info->cacheLoaded)[headers.path] = true;
             (*info->cache)[headers.path].swap(response);
             pthread_cond_signal(info->cv);
@@ -229,6 +230,7 @@ static void* workerBody(void* arg) {
         case NoCache:
             pthread_mutex_lock(info->loadedMutex);
             info->cacheLoaded->erase(headers.path);
+            std::cout << "cache erazed so due to no cache " << std::endl;
             pthread_cond_signal(info->cv);
             pthread_mutex_unlock(info->loadedMutex);
             sendData(info->fd, &response[0], response.size());
