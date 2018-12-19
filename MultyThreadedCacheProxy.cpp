@@ -65,11 +65,14 @@ bool sendData(int fd, const char* what, ssize_t dataLen) {
     ssize_t sended = 0;
     ssize_t total = 0;
     while (left) {
-        if (!poll(&pollf, 1, POLL_DELAY)) {
-            std::cout << "CLIENT NOT AVAILABLE TO WRITE TOO LONG, close session" << std::endl;
-            return false;
-        }
         sended = send(fd, what + total, left, 0);
+        if (sended == -1) {
+            if (!poll(&pollf, 1, POLL_DELAY)) {
+                std::cout << "CLIENT NOT AVAILABLE TO WRITE TOO LONG, close session" << std::endl;
+                return false;
+            } else
+                continue;
+        }
         left -= sended;
         total += sended;
     }
