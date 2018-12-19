@@ -13,15 +13,10 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/time.h>
+#include <signal.h>
 #include "CacheProxy.h"
 #include "utils.h"
 
-int count = 0;
-double timeR = 0;
-
-static void registerForWrite(std::vector<pollfd>::iterator* it) {
-    (*it)->events = POLLOUT;
-}
 
 static void registerForWrite(pollfd* fd) {
     fd->events = POLLOUT;
@@ -38,70 +33,65 @@ static void removeFromPoll(std::vector<pollfd>::iterator* it) {
 }
 
 
-
-
-static void* writeToClient(void* arg) {
-    TargetConnectInfo* requiredInfo = (TargetConnectInfo*) arg;
-    pollfd* client = &**requiredInfo->clientIterator;
-    std::string gettingPath = (*requiredInfo->descsToPath)[client].path;
+void CacheProxy::writeToClient(std::vector<pollfd>::iterator* clientIterator) {
+    pollfd* client = &**clientIterator;
+    std::string gettingPath = descsToPath[client].path;
     int g = client->fd;
     std::cout << "SENDED TO CLIENT" << g << std::endl;
-    if (requiredInfo->cacheLoaded->count(gettingPath)) {
+    if (cacheLoaded.count(gettingPath)) {
         //если есть в кеше - смотрим на уровень закачки, если готов - берем, не готов - вываливаемся
-        bool isCacheReady = (*requiredInfo->cacheLoaded)[gettingPath];
+        bool isCacheReady = cacheLoaded[gettingPath];
         if (!isCacheReady) {
             std::cout << "cache not ready" << std::endl;
-            return NULL;
+            cacheWaits[client] = descsToPath[client].path;
+            std::cout << "CACHE WAITS IS" << client << descsToPath[client].path << std::endl;
+            return;
         } else {
-            std::cout << "CACHE SIZE IS " << (*requiredInfo->cache)[gettingPath].size() << std::endl;
-		ssize_t total = 0;
-		ssize_t left = (*requiredInfo->cache)[gettingPath].size();
-		 while(total < (*requiredInfo->cache)[gettingPath].size()) {
-        	         ssize_t s = send(client->fd, &(*requiredInfo->cache)[gettingPath].front()+total,left, 0);
-			if (s == -1) {
-				//std::cout<<"che?"<<std::endl;
-				continue;
-			}
-	  		 left-=s;
-            		std::cout << "SENDED FROM CACHE" << s << std::endl;
-	 		total+=s;
-        	}
-	}
+            std::cout << "CACHE SIZE IS " << cache[gettingPath].size() << std::endl;
+            //при отсутствующей записи в map c++ гарантирует что при первом обращении я получу 0
+            int lastPosition = lastSendingPositionFromCache[client];
+            while (lastPosition < cache[gettingPath].size()) {
+                ssize_t s = send(client->fd, &cache[gettingPath].front() + lastPosition,
+                                 cache[gettingPath].size() - lastPosition, 0);
+                if (s == -1) {
+                    if (errno != EWOULDBLOCK)
+                        removeFromPoll(clientIterator);
+                    return;
+                }
+                lastPosition += s;
+                std::cout << "SENDED FROM CACHE" << s << std::endl;
+                lastSendingPositionFromCache[client] = lastPosition;
+            }
+        }
+        lastSendingPositionFromCache.erase(client);
     }
         //нет в кеше - берем сообщение из дата стора
-    else if (requiredInfo->dataPieces->count(client)) {
-        std::cout << "DATA IS " << &(*requiredInfo->dataPieces)[client].front() << std::endl;
-        std::cout << "DATA SIZE IS " << (*requiredInfo->dataPieces)[client].size() << std::endl;
-        if ((*requiredInfo->dataPieces)[client].empty()) {
+    else if (dataPieces->count(client)) {
+        std::cout << "DATA IS " << &(*dataPieces)[client].front() << std::endl;
+        std::cout << "DATA SIZE IS " << (*dataPieces)[client].size() << std::endl;
+        if ((*dataPieces)[client].empty()) {
             std::cout << "a";
         }
-	while(not (*requiredInfo->dataPieces)[client].empty()) {
-        ssize_t s = send(client->fd, &(*requiredInfo->dataPieces)[client].front(),
-                         (*requiredInfo->dataPieces)[client].size(), 0);
-	(*requiredInfo->dataPieces)[client].erase((*requiredInfo->dataPieces)[client].begin(),(*requiredInfo->dataPieces)[client].begin()+s);
-        std::cout << "SENDED " << s << std::endl;
-}
-    }
-
-
-    else {
+        while (not(*dataPieces)[client].empty()) {
+            ssize_t s = send(client->fd, &(*dataPieces)[client].front(), (*dataPieces)[client].size(), 0);
+            std::cout << "SENDED " << s << std::endl;
+            if (s == -1)
+                return;
+            (*dataPieces)[client].erase((*dataPieces)[client].begin(), (*dataPieces)[client].begin() + s);
+        }
+    } else {
         //todo нет ни в дата сторе ни в кеше - дропнули клиента, который качал что-то большое, гыгы
     }
-    //
-    removeFromPoll(requiredInfo->clientIterator);
-    return NULL;
+    removeFromPoll(clientIterator);
 }
 
-static void* targetConnect(void* arg) {
-    TargetConnectInfo* requiredInfo = (TargetConnectInfo*) arg;
-    const static int BUFFER_LENGTH = 5000;
-    char buffer[BUFFER_LENGTH];
+void CacheProxy::targetConnect(std::vector<pollfd>::iterator* clientIterator) {
     std::fill(buffer, buffer + BUFFER_LENGTH, 0);
-    std::cout << "CONNECT TO TARGET FROM: " << (*requiredInfo->clientIterator)->fd << std::endl;
+    std::cout << "CONNECT TO TARGET FROM: " << (*clientIterator)->fd << std::endl;
     std::string request;
-    pollfd* oldClientAddress = &**requiredInfo->clientIterator;
+    pollfd* oldClientAddress = &**clientIterator;
 
-    while (ssize_t read = recv((*requiredInfo->clientIterator)->fd, buffer, BUFFER_LENGTH, 0)) {
+    while (ssize_t read = recv((*clientIterator)->fd, buffer, BUFFER_LENGTH, 0)) {
         request += buffer;
         if (read != BUFFER_LENGTH)
             break;
@@ -109,35 +99,34 @@ static void* targetConnect(void* arg) {
 
     if (request.empty()) {
         std::cout << "Dead client" << std::endl;
-        removeFromPoll(requiredInfo->clientIterator);
-        return NULL;
+        removeFromPoll(clientIterator);
+        return;
     }
     std::cout << "i read " << request << std::endl;
     RequestInfo targetInfo;
 
     if (!httpParseRequest(request, &targetInfo)) {
         std::cout << "Invalid http request received!" << std::endl;
-        removeFromPoll(requiredInfo->clientIterator);
-        return NULL;
+        removeFromPoll(clientIterator);
+        return;
     }
 
     if (targetInfo.method != "GET" and targetInfo.method != "HEAD") {
         std::string notSupporting = "HTTP/1.1 405\r\n\r\nAllow: GET\r\n";
-        send((*requiredInfo->clientIterator)->fd, notSupporting.c_str(), notSupporting.size(), 0);
-        removeFromPoll(requiredInfo->clientIterator);
-//        std::cout << "Method not allowed!" << std::endl;
-        return NULL;
+        send((*clientIterator)->fd, notSupporting.c_str(), notSupporting.size(), 0);
+        removeFromPoll(clientIterator);
+        return;
     }
 
     typeConnectionAndPath metaInfo;
     metaInfo.path = targetInfo.path;
     metaInfo.isClient = true;
-    (*requiredInfo->descsToPath)[oldClientAddress] = metaInfo;
+    descsToPath[oldClientAddress] = metaInfo;
 
 
-    if (requiredInfo->cacheLoaded->count(targetInfo.path)) {
-        registerForWrite(requiredInfo->clientIterator);
-        return NULL;
+    if (cacheLoaded.count(targetInfo.path)) {
+        registerForWrite(oldClientAddress);
+        return;
     }
 
 
@@ -148,31 +137,15 @@ static void* targetConnect(void* arg) {
     hints.ai_protocol = IPPROTO_TCP;
 
     addrinfo* addr = NULL;
-    std::cout<<"\n\n\n RESOLVING NAME "<<std::endl;
-	struct timeval tval_before, tval_after, tval_result;
-
-        gettimeofday(&tval_before, NULL);
- 	getaddrinfo(targetInfo.host.c_str(), NULL, &hints, &addr);
-	gettimeofday(&tval_after, NULL);
-
-//timersub(&tval_after, &tval_before, &tval_result);
-	tval_result.tv_sec = tval_after.tv_sec - tval_before.tv_sec;
-	tval_result.tv_usec= tval_after.tv_usec - tval_before.tv_usec;
-	double kek = tval_before.tv_sec+ 0.000001* tval_before.tv_usec;
-	double lol =  tval_after.tv_sec+ 0.000001* tval_after.tv_usec;
-
-	timeR+=(lol-kek);
-printf("Time elapsed: %ld.%06ld\n", (long int)tval_result.tv_sec, (long int)tval_result.tv_usec);
-	count+=1;
-   // std::cout<<"\n\n RESOLVE FINISHED with time "<<time<<std::endl;
+    getaddrinfo(targetInfo.host.c_str(), NULL, &hints, &addr);
     sockaddr_in targetAddr;
 
     if (!addr) {
         std::cout << "Can't resolve host!" << std::endl;
         std::string notSupporting = "HTTP/1.1 523\r\n\r\n";
-        send((*requiredInfo->clientIterator)->fd, notSupporting.c_str(), notSupporting.size(), 0);
-        removeFromPoll(requiredInfo->clientIterator);
-        return NULL;
+        send((*clientIterator)->fd, notSupporting.c_str(), notSupporting.size(), 0);
+        removeFromPoll(clientIterator);
+        return;
     }
 
     targetAddr = *(sockaddr_in*) (addr->ai_addr);
@@ -182,14 +155,14 @@ printf("Time elapsed: %ld.%06ld\n", (long int)tval_result.tv_sec, (long int)tval
     int targetSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (targetSocket == -1) {
         std::cout << "Can't open target socket! Terminating" << std::endl;
-        removeFromPoll(requiredInfo->clientIterator);
-        return NULL;
+        removeFromPoll(clientIterator);
+        return;
     }
     fcntl(targetSocket, F_SETFL, fcntl(targetSocket, F_GETFL, 0) | O_NONBLOCK);
     if (connect(targetSocket, (sockaddr*) &targetAddr, sizeof(targetAddr)) != 0 and errno != EINPROGRESS) {
         std::cout << "Can't async connect to target! Terminating!" << std::endl;
-        removeFromPoll(requiredInfo->clientIterator);
-        return NULL;
+        removeFromPoll(clientIterator);
+        return;
     }
     std::cout << "AND MY TARGET IS " << targetSocket << std::endl;
 
@@ -198,103 +171,96 @@ printf("Time elapsed: %ld.%06ld\n", (long int)tval_result.tv_sec, (long int)tval
     target.fd = targetSocket;
     target.events = POLLOUT;
     target.revents = 0;
-    *requiredInfo->clientIterator = requiredInfo->pollDescryptos->insert(requiredInfo->pollDescryptos->end(), target);
+    *clientIterator = pollDescryptors->insert(pollDescryptors->end(), target);
 
 
-    pollfd* insertedAddress = &**requiredInfo->clientIterator;
-    for (std::vector<pollfd>::iterator it = requiredInfo->pollDescryptos->begin();
-         it != requiredInfo->pollDescryptos->end(); ++it) {
+    pollfd* insertedAddress = &**clientIterator;
+    for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
         if (&*it == oldClientAddress) {
-            *requiredInfo->clientIterator = it;
+            *clientIterator = it;
             break;
         }
     }
 
-    std::cout << "old " << oldClientAddress << " inserted " << insertedAddress << " insrted fd " << insertedAddress->fd
-              << std::endl;
-
 
     for (int i = 0; i < request.size(); ++i) {
-        (*requiredInfo->dataPieces)[insertedAddress].push_back(request[i]);
+        (*dataPieces)[insertedAddress].push_back(request[i]);
     }
 
 
-    (*requiredInfo->transferMap)[oldClientAddress] = insertedAddress;
-    (*requiredInfo->transferMap)[insertedAddress] = oldClientAddress;
+    (*transferMap)[oldClientAddress] = insertedAddress;
+    (*transferMap)[insertedAddress] = oldClientAddress;
 
     metaInfo.isClient = false;
 
-    (*requiredInfo->descsToPath)[insertedAddress] = metaInfo;
-    (*requiredInfo->clientIterator)->events = 0;
-    return NULL;
+    descsToPath[insertedAddress] = metaInfo;
+    (*clientIterator)->events = 0;
+    return;
 }
 
-static void* readFromServer(void* arg) {
-    TargetConnectInfo* requiredInfo = (TargetConnectInfo*) arg;
-    pollfd* addr = &**requiredInfo->clientIterator;
+void CacheProxy::readFromServer(std::vector<pollfd>::iterator* clientIterator) {
+    pollfd* addr = &**clientIterator;
     std::cout << "read from server" << std::endl;
-    if (!requiredInfo->transferMap->count(addr)) {
+    if (!transferMap->count(addr)) {
         std::cout << "No client to write from server!" << std::endl;
-        removeFromPoll(requiredInfo->clientIterator);
-        return NULL;
+        removeFromPoll(clientIterator);
+        return;
     }
 
-    pollfd* to = (*requiredInfo->transferMap)[addr];
+    pollfd* to = (*transferMap)[addr];
 
-    const static int BUFFER_SIZE = 5000;
-    char buffer[BUFFER_SIZE];
-    std::fill(buffer, buffer + BUFFER_SIZE, 0);
+    std::fill(buffer, buffer + BUFFER_LENGTH, 0);
     std::string response;
 
 
     while (1) {
-        ssize_t readed = recv(addr->fd, buffer, BUFFER_SIZE, 0);
+        ssize_t readed = recv(addr->fd, buffer, BUFFER_LENGTH, 0);
         std::cout << readed << std::endl;
         for (int i = 0; i < readed; ++i) {
-            (*requiredInfo->dataPieces)[to].push_back(buffer[i]);
+            (*dataPieces)[to].push_back(buffer[i]);
         }
 
         if (readed == -1 and errno != EWOULDBLOCK) {
             perror("Error during read");
-            removeFromPoll(requiredInfo->clientIterator);
-            return NULL;
+            removeFromPoll(clientIterator);
+            return;
         }
-        (*requiredInfo->cacheLoaded)[(*requiredInfo->descsToPath)[addr].path] = false;
+        cacheLoaded[descsToPath[addr].path] = false;
 //        сервер разорвал соединение - докачали все
         if (!readed) {
-            (*requiredInfo->cacheLoaded)[(*requiredInfo->descsToPath)[addr].path] = true;
-            ResponseParseStatus status = httpParseResponse(&(*requiredInfo->dataPieces)[to].front(),
-                                                           (*requiredInfo->dataPieces)[to].size());
+            (cacheLoaded)[descsToPath[addr].path] = true;
+            clearCacheWaits(descsToPath[addr].path);
+            ResponseParseStatus status = httpParseResponse(&(*dataPieces)[to].front(), (*dataPieces)[to].size());
             std::string serverError = "HTTP/1.1 523\r\n\r\n";
+
             switch (status) {
                 case OK:
                     //ок - докачали все, кладем в кеш
-                    (*requiredInfo->cache)[(*requiredInfo->descsToPath)[addr].path].swap(
-                            (*requiredInfo->dataPieces)[to]);
-                    requiredInfo->dataPieces->erase(to);
-                    requiredInfo->transferMap->erase(to);
-                    requiredInfo->transferMap->erase(addr);
+                    cache[descsToPath[addr].path].swap((*dataPieces)[to]);
+                    dataPieces->erase(to);
+                    transferMap->erase(to);
+                    transferMap->erase(addr);
                     to->events = POLLOUT;
                     break;
                 case Error:
                     //некорректный запрос - удаляем все информацию о соединениях
-                    (*requiredInfo->cacheLoaded).erase((*requiredInfo->descsToPath)[addr].path);
-                    removeFromPoll(requiredInfo->clientIterator);
+                    cacheLoaded.erase(descsToPath[addr].path);
+                    removeFromPoll(clientIterator);
                     for (int i = 0; i < serverError.size(); ++i) {
-                        (*requiredInfo->dataPieces)[to].push_back(serverError[i]);
+                        (*dataPieces)[to].push_back(serverError[i]);
                     }
-                    return NULL;
+                    return;
                 case NoCache:
-                    (*requiredInfo).cacheLoaded->erase((*requiredInfo->descsToPath)[addr].path);
+                    cacheLoaded.erase(descsToPath[addr].path);
                     break;
             }
-            removeFromPoll(requiredInfo->clientIterator);
+            removeFromPoll(clientIterator);
             registerForWrite(to);
-            return NULL;
+            return;
         }
         if (errno == EWOULDBLOCK) {
             std::cout << "EWOUDLBLOCK" << std::endl;
-            return NULL;
+            return;
         }
 
     }
@@ -302,11 +268,10 @@ static void* readFromServer(void* arg) {
 }
 
 
-static void* acceptConnection(void* args) {
-    ThreadRegisterInfo* descs = (ThreadRegisterInfo*) args;
+void CacheProxy::acceptConnection(pollfd* client) {
     sockaddr_in addr;
     size_t addSize = sizeof(addr);
-    int newClient = accept(*descs->server, (sockaddr*) &addr, (socklen_t*) &addSize);
+    int newClient = accept(serverSocket, (sockaddr*) &addr, (socklen_t*) &addSize);
     std::cout << "I ACCEPTED NEW CLIENT AND FD IS " << newClient << std::endl;
 
     if (newClient == -1) {
@@ -314,41 +279,30 @@ static void* acceptConnection(void* args) {
     }
     //is this required?
     fcntl(newClient, F_SETFL, fcntl(newClient, F_GETFL, 0) | O_NONBLOCK);
-    descs->client->fd = newClient;
-    return NULL;
+    client->fd = newClient;
 }
 
-static void* sendData(void* args) {
-
-    SendDataInfo* requiredInfo = (SendDataInfo*) args;
-    if (!requiredInfo->dataPieces->count(requiredInfo->target)) {
+void CacheProxy::sendData(std::vector<pollfd>::iterator* target) {
+    if (!dataPieces->count(&**target)) {
         std::cout << "Unknown client" << std::endl;
-        close(requiredInfo->target->fd);
-        requiredInfo->target->fd = -requiredInfo->target->fd;
-        return NULL;
+        removeFromPoll(target);
+        return;
     }
-    ssize_t size = (*requiredInfo->dataPieces)[requiredInfo->target].size();
+    ssize_t size = (*dataPieces)[&**target].size();
     std::cout << "with size " << size << std::endl;
     if (size == 0) {
-        std::cout << "ZERO LENGTH SIZE WTF" << std::endl;
-        for (std::vector<pollfd>::iterator it = requiredInfo->pollDescryptors->begin();
-             it != requiredInfo->pollDescryptors->end(); ++it) {
-            if (&*it == requiredInfo->target) {
-                close(requiredInfo->target->fd);
-                requiredInfo->target->fd = -requiredInfo->target->fd;
-                return NULL;
-            }
-        }
+        removeFromPoll(target);
+        return;
+
     }
-    std::cout << "I SENDIND THIS " << &(*requiredInfo->dataPieces)[requiredInfo->target][0] << std::endl;
-    std::cout << "SENDING TO " << requiredInfo->target->fd << std::endl;
+    std::cout << "I SENDIND THIS " << &(*dataPieces)[&**target][0] << std::endl;
+    std::cout << "SENDING TO " << &(*target)->fd << std::endl;
 
-    send(requiredInfo->target->fd, &(*requiredInfo->dataPieces)[requiredInfo->target][0],
-         (*requiredInfo->dataPieces)[requiredInfo->target].size(), 0);
+    send((*target)->fd, &(*dataPieces)[&**target][0], (*dataPieces)[&**target].size(), 0);
 
-    requiredInfo->dataPieces->erase(requiredInfo->target);
-    requiredInfo->target->events = POLLIN;
-    return NULL;
+    dataPieces->erase(&**target);
+    (*target)->events = POLLIN;
+    return;
 }
 
 CacheProxy::CacheProxy() {
@@ -370,44 +324,37 @@ void CacheProxy::pollManage() {
     c.fd = -1;
     c.events = POLLIN;
     c.revents = 0;
-
-	std::cout<<"RESOLVE MEAN TIME "<< timeR/count <<" and count is"<< count<<std::endl;
-
     poll(&(*pollDescryptors)[0], pollDescryptors->size(), POLL_DELAY);
 
 
     for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
-        if (it->fd > 0 and it->revents & POLLERR) {
-            pollfd* client = (*transferMap)[&*it];
-            close(client->fd);
-            client->fd = (-client->fd);
-            removeFromPoll(&it);
-            std::cout << "REFUSED" << std::endl;
-        } else if (it->revents & POLLOUT and it->fd > 0) {
-            if (!descsToPath[&*it].isClient) {
-                SendDataInfo sdi(&*it, dataPieces, pollDescryptors);
-                sendData(&sdi);
-            } else {
-                TargetConnectInfo tgc(&serverSocket, &it, pollDescryptors, dataPieces, transferMap, &descsToPath,
-                                      &cacheLoaded, &cache);
-                writeToClient(&tgc);
-            }
-        } else if (it->fd > 0 and it->revents & POLLIN) {
-            //если слушающий сокет - принимаем соединения
-            if (it->fd == serverSocket) {
-                ThreadRegisterInfo info(&serverSocket, &c);
-                acceptConnection(&info);
-                //если это клиент - коннектимся
-            } else if (!descsToPath.count(&*it) or descsToPath[&*it].isClient) {
-                TargetConnectInfo tgc(&serverSocket, &it, pollDescryptors, dataPieces, transferMap, &descsToPath,
-                                      &cacheLoaded, &cache);
-                targetConnect(&tgc);
-            }
-                //если сервер - считываем инфу
-            else {
-                TargetConnectInfo tgc(&serverSocket, &it, pollDescryptors, dataPieces, transferMap, &descsToPath,
-                                      &cacheLoaded, &cache);
-                readFromServer(&tgc);
+
+        if (it->fd > 0) {
+            if (it->revents & POLLERR) {
+                pollfd* client = (*transferMap)[&*it];
+                close(client->fd);
+                client->fd = (-client->fd);
+                removeFromPoll(&it);
+                std::cout << "REFUSED" << std::endl;
+            } else if (it->revents & POLLOUT) {
+                if (!descsToPath[&*it].isClient) {
+                    sendData(&it);
+                } else {
+                    if (!cacheWaits.count(&*it))
+                        writeToClient(&it);
+                }
+            } else if (it->revents & POLLIN) {
+                //если слушающий сокет - принимаем соединения
+                if (it->fd == serverSocket) {
+                    acceptConnection(&c);
+                    //если это клиент - коннектимся
+                } else if (!descsToPath.count(&*it) or descsToPath[&*it].isClient) {
+                    targetConnect(&it);
+                }
+                    //если сервер - считываем инфу
+                else {
+                    readFromServer(&it);
+                }
             }
         }
     }
@@ -418,7 +365,6 @@ void CacheProxy::pollManage() {
     }
 
     removeDeadDescryptors();
-
 }
 
 
@@ -463,6 +409,14 @@ void CacheProxy::removeDeadDescryptors() {
             newDescsToPath[oldNewMap[it->first]] = it->second;
         }
     }
+    std::map<pollfd*, std::string> newCacheWaits;
+    for (std::map<pollfd*, std::string>::iterator it = cacheWaits.begin(); it != cacheWaits.end(); ++it) {
+        if (it->first->fd > 0) {
+            newCacheWaits[oldNewMap[it->first]] = it->second;
+        }
+    }
+    cacheWaits.swap(newCacheWaits);
+
     descsToPath.swap(newDescsToPath);
 
     dataPieces->swap(*ndataPieces);
@@ -473,16 +427,14 @@ void CacheProxy::removeDeadDescryptors() {
 
     pollDescryptors->swap(*npollDescryptors);
     delete npollDescryptors;
-    for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
-        std::cout << &*it << std::endl;
-    }
 
 
 }
 
 void CacheProxy::init(int port) {
-    serverSocket = socket(AF_INET, SOCK_STREAM, 0);
 
+    signal(SIGPIPE, SIG_IGN);
+    serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     pollDescryptors = new std::vector<pollfd>;
     transferMap = new std::map<pollfd*, pollfd*>;
     dataPieces = new std::map<pollfd*, std::vector<char> >;
@@ -514,6 +466,15 @@ void CacheProxy::init(int port) {
     me.events = POLLIN;
     pollDescryptors->reserve(MAXIMIUM_CLIENTS);
     pollDescryptors->push_back(me);
+}
+
+void CacheProxy::clearCacheWaits(const std::string &path) {
+    std::map<pollfd*, std::string> newCW;
+    for (std::map<pollfd*, std::string>::iterator it = cacheWaits.begin(); it != cacheWaits.end(); ++it) {
+        if (it->second != path)
+            newCW[it->first] = it->second;
+    }
+    cacheWaits.swap(newCW);
 }
 
 
