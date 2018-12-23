@@ -263,7 +263,9 @@ void MultyThreadedCacheProxy::startWorking() {
         if (pthread_create(&thread, NULL, workerBody, &*(infos.end() - 1))) {
             std::cerr << "CAN' T CREATE THREAD " << std::endl;
             close(client);
+            continue;
         }
+        pthread_detach(thread);
     }
 }
 

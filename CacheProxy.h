@@ -47,13 +47,25 @@ private:
     const static int BUFFER_LENGTH = 5000;
     char buffer[BUFFER_LENGTH];
     sockaddr_in serverAddr;
+
+    //url страницы  -> данные
     std::map<std::string, std::vector<char> > cache;
+
+    // юрс страницы - статус кеша
     std::map<std::string, bool> cacheLoaded;
     std::vector<pollfd>* pollDescryptors;
+
+    //куда отправлять - с какой позиции
     std::map<pollfd*, int> lastSendingPositionFromCache;
+    // кто куда пишет
     std::map<pollfd*, pollfd*>* transferMap;
+    // дескриптор -> путь на сайт и информацию является ли соединение клиентским
     std::map<pollfd*, typeConnectionAndPath> descsToPath;
+
+    //КОМУ что отправить
     std::map<pollfd*, std::vector<char> >* dataPieces;
+
+    //какой дескриптор ждет страницу в кеше
     std::map<pollfd*, std::string> cacheWaits;
 };
 

@@ -167,6 +167,8 @@ void CacheProxy::targetConnect(std::vector<pollfd>::iterator* clientIterator) {
     std::cout << "AND MY TARGET IS " << targetSocket << std::endl;
 
 
+    //вставка нового дескриптора в полл
+
     pollfd target;
     target.fd = targetSocket;
     target.events = POLLOUT;
@@ -183,6 +185,7 @@ void CacheProxy::targetConnect(std::vector<pollfd>::iterator* clientIterator) {
     }
 
 
+    //говоришь что в этот дескриптор доллжен быть передан запрос
     for (int i = 0; i < request.size(); ++i) {
         (*dataPieces)[insertedAddress].push_back(request[i]);
     }
@@ -293,7 +296,6 @@ void CacheProxy::sendData(std::vector<pollfd>::iterator* target) {
     if (size == 0) {
         removeFromPoll(target);
         return;
-
     }
     std::cout << "I SENDIND THIS " << &(*dataPieces)[&**target][0] << std::endl;
     std::cout << "SENDING TO " << &(*target)->fd << std::endl;
@@ -324,12 +326,15 @@ void CacheProxy::pollManage() {
     c.fd = -1;
     c.events = POLLIN;
     c.revents = 0;
+
     poll(&(*pollDescryptors)[0], pollDescryptors->size(), POLL_DELAY);
 
 
     for (std::vector<pollfd>::iterator it = pollDescryptors->begin(); it != pollDescryptors->end(); ++it) {
 
+        //если валидный
         if (it->fd > 0) {
+            //если ошибка (конекшен рефьюзед)
             if (it->revents & POLLERR) {
                 pollfd* client = (*transferMap)[&*it];
                 close(client->fd);
