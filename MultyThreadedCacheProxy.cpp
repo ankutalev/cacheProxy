@@ -7,6 +7,7 @@
 #include <netdb.h>
 #include <errno.h>
 #include <cstdio>
+#include <signal.h>
 #include "utils.h"
 #include "RequestInfo.h"
 
@@ -14,6 +15,7 @@ void MultyThreadedCacheProxy::init(int port) {
     serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     pthread_mutex_init(&loadedMutex, NULL);
     pthread_cond_init(&cv, NULL);
+    signal(SIGPIPE, SIG_IGN);
     int opt = 1;
     setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     if (serverSocket == -1)
@@ -198,14 +200,14 @@ static void* workerBody(void* arg) {
             std::cout << "sen cache for " << headers.path << " as ready" << std::endl;
             (*info->cacheLoaded)[headers.path] = true;
             (*info->cache)[headers.path].swap(response);
-            pthread_cond_signal(info->cv);
+            pthread_cond_broadcast(info->cv);
             pthread_mutex_unlock(info->loadedMutex);
             break;
         case Error: {
             std::cout << "CACHE ERASED" << std::endl;
             pthread_mutex_lock(info->loadedMutex);
             info->cacheLoaded->erase(headers.path);
-            pthread_cond_signal(info->cv);
+            pthread_cond_broadcast(info->cv);
             pthread_mutex_unlock(info->loadedMutex);
             sendData(info->fd, serverError.c_str(), serverError.size());
             close(info->fd);
@@ -216,7 +218,7 @@ static void* workerBody(void* arg) {
             pthread_mutex_lock(info->loadedMutex);
             info->cacheLoaded->erase(headers.path);
             std::cout << "cache erazed so due to no cache " << std::endl;
-            pthread_cond_signal(info->cv);
+            pthread_cond_broadcast(info->cv);
             pthread_mutex_unlock(info->loadedMutex);
             sendData(info->fd, &response[0], response.size());
             close(info->fd);
