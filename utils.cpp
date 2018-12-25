@@ -22,6 +22,7 @@ RequestParseStatus httpParseRequest(std::string &req, RequestInfo* info) {
     for (int i = 0; i != num_headers; ++i) {
         std::string headerName = headers[i].name;
         headerName.erase(headerName.begin() + headers[i].name_len, headerName.end());
+
         if (headerName != "Connection") {
             info->otherHeaders[headerName] = headers[i].value;
             info->otherHeaders[headerName].erase(info->otherHeaders[headerName].begin() + headers[i].value_len,
@@ -43,7 +44,7 @@ RequestParseStatus httpParseRequest(std::string &req, RequestInfo* info) {
 }
 
 
-ResponseParseStatus httpParseResponse(const char* response, size_t responseLen) {
+ResponseParseStatus httpParseResponse(const char* response, size_t responseLen, RequestInfo* info) {
     const char* message;
     int pret, minor_version, status;
     struct phr_header headers[100];
@@ -54,5 +55,16 @@ ResponseParseStatus httpParseResponse(const char* response, size_t responseLen) 
     if (pret == -1 or minor_version < 0)
         return Error;
     std::cout << "VERSION " << minor_version << " STATUS " << status << std::endl;
+    if (NULL != info) {
+        for (int i = 0; i != num_headers; ++i) {
+            std::string headerName = headers[i].name;
+            headerName.erase(headerName.begin() + headers[i].name_len, headerName.end());
+            if (headerName == "Content-Length") {
+                info->host = headers[i].value;
+                info->host.erase(info->host.begin() + headers[i].value_len, info->host.end());
+            }
+
+        }
+    }
     return (status == 200) ? OK : NoCache;
 }

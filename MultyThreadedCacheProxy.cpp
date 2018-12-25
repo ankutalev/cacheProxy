@@ -8,8 +8,11 @@
 #include <errno.h>
 #include <cstdio>
 #include <signal.h>
+#include <cstdlib>
 #include "utils.h"
 #include "RequestInfo.h"
+
+#define CACHE_LIMIT  5242880;
 
 void MultyThreadedCacheProxy::init(int port) {
     serverSocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -89,6 +92,20 @@ bool readRequest(int from, std::string &req, RequestInfo* info) {
     return res == REQ_OK;
 }
 
+void straight(int cl, int targ, std::vector<char> &resp) {
+    sendData(cl, &resp[0], resp.size());
+    std::cout << &resp[0] << std::endl;
+    const int BUFFER_SIZE = 5000;
+    char buffer[BUFFER_SIZE];
+    ssize_t sen;
+    do {
+        sen = recv(targ, buffer, BUFFER_SIZE - 1, 0);
+        buffer[sen] = 0;
+        sendData(cl, buffer, sen);
+        std::cout << "SEND" << sen << std::endl;
+    } while (sen != 0);
+}
+
 static void* workerBody(void* arg) {
     RequiredInfo* info = (RequiredInfo*) arg;
     static const int BUFFER_SIZE = 5000;
@@ -111,6 +128,7 @@ static void* workerBody(void* arg) {
         close(info->fd);
         return NULL;
     }
+
 
     pthread_mutex_lock(info->loadedMutex);
     unsigned long areCachePageExists = info->cacheLoaded->count(headers.path);
@@ -168,6 +186,14 @@ static void* workerBody(void* arg) {
         close(info->fd);
         return NULL;
     }
+
+
+    long int contentLength = strtoll(headers.otherHeaders["Content-Length"].c_str(), NULL, 10);
+    long int limit = CACHE_LIMIT;
+
+
+
+
     if (!sendData(server, request.c_str(), request.size())) {
         std::cout << "Can't send  request to target! Terminating!" << std::endl;
         close(info->fd);
@@ -182,15 +208,25 @@ static void* workerBody(void* arg) {
     (*info->cacheLoaded)[headers.path] = false;
     pthread_mutex_unlock(info->loadedMutex);
     do {
+        RequestInfo inf;
         readed = recv(server, buffer, BUFFER_SIZE - 1, 0);
         buffer[readed] = 0;
         for (int i = 0; i < readed; ++i) {
             response.push_back(buffer[i]);
         }
+        httpParseResponse(&response[0], response.size(), &inf);
+        if (strtoll(inf.host.c_str(), NULL, 10) > limit) {
+            pthread_mutex_lock(info->loadedMutex);
+            (*info->cacheLoaded).erase(headers.path);
+            pthread_mutex_unlock(info->loadedMutex);
+            straight(info->fd, server, response);
+            close(info->fd);
+            close(server);
+            return NULL;
+        }
     } while (readed > 0);
     close(server);
-    ResponseParseStatus status = httpParseResponse(&response[0], response.size());
-
+    ResponseParseStatus status = httpParseResponse(&response[0], response.size(), NULL);
 
     std::string serverError = "HTTP/1.1 523\r\n\r\n";
 

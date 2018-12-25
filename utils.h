@@ -12,4 +12,4 @@ enum RequestParseStatus {
 
 RequestParseStatus httpParseRequest(std::string &req, RequestInfo* info);
 
-ResponseParseStatus httpParseResponse(const char* response, size_t responseLen);
+ResponseParseStatus httpParseResponse(const char* response, size_t responseLen, RequestInfo* info);
