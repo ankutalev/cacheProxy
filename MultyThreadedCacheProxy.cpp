@@ -9,7 +9,6 @@
 #include <cstdio>
 #include "utils.h"
 #include "RequestInfo.h"
-#include "fcntl.h"
 
 void MultyThreadedCacheProxy::init(int port) {
     serverSocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -56,22 +55,13 @@ struct RequiredInfo {
 };
 
 bool sendData(int fd, const char* what, ssize_t dataLen) {
-    pollfd pollf;
-    pollf.fd = fd;
-    pollf.events = POLLOUT;
-    pollf.revents = 0;
-    static const int POLL_DELAY = 5000;
     ssize_t left = dataLen;
     ssize_t sended = 0;
     ssize_t total = 0;
     while (left) {
         sended = send(fd, what + total, left, 0);
         if (sended == -1) {
-            if (!poll(&pollf, 1, POLL_DELAY)) {
-                std::cout << "CLIENT NOT AVAILABLE TO WRITE TOO LONG, close session" << std::endl;
                 return false;
-            } else
-                continue;
         }
         left -= sended;
         total += sended;
@@ -79,8 +69,22 @@ bool sendData(int fd, const char* what, ssize_t dataLen) {
     return true;
 }
 
-
-
+bool readRequest(int from, std::string &req, RequestInfo* info) {
+    static const int BUFFER_SIZE = 5000;
+    char buffer[BUFFER_SIZE];
+    std::fill(buffer, buffer + BUFFER_SIZE, 0);
+    RequestParseStatus res;
+    do {
+        ssize_t received = recv(from, buffer, BUFFER_SIZE - 1, 0);
+        if (received == -1)
+            return false;
+        buffer[received] = 0;
+        req += buffer;
+        res = httpParseRequest(req, info);
+    } while (res == REQ_NOT_FULL);
+    std::cout << req << std::endl;
+    return res == REQ_OK;
+}
 
 static void* workerBody(void* arg) {
     RequiredInfo* info = (RequiredInfo*) arg;
@@ -89,29 +93,9 @@ static void* workerBody(void* arg) {
     std::fill(buffer, buffer + BUFFER_SIZE, 0);
     ssize_t readed = -1;
     std::string request;
-    fcntl(info->fd, F_SETFL, fcntl(info->fd, F_GETFL, 0) | O_NONBLOCK);
-    pollfd pollStruct;
-    pollStruct.fd = info->fd;
-    pollStruct.events = POLLIN;
-    pollStruct.revents = 0;
-    static const int POLL_DELAY = 5000;
-    if (!poll(&pollStruct, 1, POLL_DELAY)) {
-        std::cout << "Client not ready too long, closing connection" << std::endl;
-        close(info->fd);
-        return NULL;
-    }
-    readed = recv(info->fd, buffer, BUFFER_SIZE - 1, 0);
-    if (readed == -1) {
-        perror("read");
-    } else {
-        buffer[readed] = 0;
-        request += buffer;
-        std::cout << "readed " << readed << std::endl;
-    }
-
     RequestInfo headers;
-    if (!httpParseRequest(request, &headers)) {
-        std::cout << "Invalid http request received!" << std::endl;
+
+    if (not readRequest(info->fd, request, &headers)) {
         close(info->fd);
         return NULL;
     }

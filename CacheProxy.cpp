@@ -105,7 +105,7 @@ void CacheProxy::targetConnect(std::vector<pollfd>::iterator* clientIterator) {
     std::cout << "i read " << request << std::endl;
     RequestInfo targetInfo;
 
-    if (!httpParseRequest(request, &targetInfo)) {
+    if (REQ_ERROR == httpParseRequest(request, &targetInfo)) {
         std::cout << "Invalid http request received!" << std::endl;
         removeFromPoll(clientIterator);
         return;

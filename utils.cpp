@@ -2,7 +2,7 @@
 #include <iostream>
 #include "picohttpparser/picohttpparser.h"
 
-bool httpParseRequest(std::string &req, RequestInfo* info) {
+RequestParseStatus httpParseRequest(std::string &req, RequestInfo* info) {
     const char* path;
     const char* method;
     int pret, minor_version;
@@ -11,8 +11,10 @@ bool httpParseRequest(std::string &req, RequestInfo* info) {
     num_headers = sizeof(headers) / sizeof(headers[0]);
     pret = phr_parse_request(req.c_str(), req.size(), &method, &method_len, &path, &path_len,
                              &minor_version, headers, &num_headers, prevbuflen);
-    if (pret < -1)
-        return false;
+    if (pret == -1)
+        return REQ_ERROR;
+    if (pret == -2)
+        return REQ_NOT_FULL;
     info->method = method;
     info->method.erase(info->method.begin() + method_len, info->method.end());
     info->path = path;
@@ -37,7 +39,7 @@ bool httpParseRequest(std::string &req, RequestInfo* info) {
         req += "\r\n";
     }
     req += "\r\n";
-    return true;
+    return REQ_OK;
 }
 
 

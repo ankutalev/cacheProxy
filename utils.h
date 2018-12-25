@@ -6,6 +6,10 @@ enum ResponseParseStatus {
     OK, NoCache, Error
 };
 
-bool httpParseRequest(std::string &req, RequestInfo* info);
+enum RequestParseStatus {
+    REQ_OK, REQ_NOT_FULL, REQ_ERROR
+};
+
+RequestParseStatus httpParseRequest(std::string &req, RequestInfo* info);
 
 ResponseParseStatus httpParseResponse(const char* response, size_t responseLen);
