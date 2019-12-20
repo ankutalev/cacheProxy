@@ -12,7 +12,9 @@
 #include "utils.h"
 #include "RequestInfo.h"
 
-#define CACHE_LIMIT  5242880;
+#define CACHE_LIMIT  40000
+
+int currentCacheSize = 0;
 
 void MultyThreadedCacheProxy::init(int port) {
     serverSocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -56,6 +58,7 @@ struct RequiredInfo {
     int fd;
     std::map<std::string, std::vector<char> >* cache;
     std::map<std::string, bool>* cacheLoaded;
+    std::map<std::string, bool>* sendingNow;
     pthread_mutex_t* loadedMutex;
     pthread_cond_t* cv;
 };
@@ -67,7 +70,7 @@ bool sendData(int fd, const char* what, ssize_t dataLen) {
     while (left) {
         sended = send(fd, what + total, left, 0);
         if (sended == -1) {
-                return false;
+            return false;
         }
         left -= sended;
         total += sended;
@@ -82,7 +85,7 @@ bool readRequest(int from, std::string &req, RequestInfo* info) {
     RequestParseStatus res;
     do {
         ssize_t received = recv(from, buffer, BUFFER_SIZE - 1, 0);
-        if (received == -1)
+        if (received == -1 || received ==0)
             return false;
         buffer[received] = 0;
         req += buffer;
@@ -94,7 +97,6 @@ bool readRequest(int from, std::string &req, RequestInfo* info) {
 
 void straight(int cl, int targ, std::vector<char> &resp) {
     sendData(cl, &resp[0], resp.size());
-    std::cout << &resp[0] << std::endl;
     const int BUFFER_SIZE = 5000;
     char buffer[BUFFER_SIZE];
     ssize_t sen;
@@ -126,6 +128,7 @@ static void* workerBody(void* arg) {
         std::string notSupporting = "HTTP/1.1 405\r\n\r\nAllow: GET\r\n";
         sendData(info->fd, notSupporting.c_str(), notSupporting.size());
         close(info->fd);
+
         return NULL;
     }
 
@@ -143,8 +146,12 @@ static void* workerBody(void* arg) {
         }
         areCachePageExists = info->cacheLoaded->count(headers.path);
         if (areCachePageExists) {
+            (*info->sendingNow)[headers.path] = true;
             pthread_mutex_unlock(info->loadedMutex);
             sendData(info->fd, &(*info->cache)[headers.path].front(), (*info->cache)[headers.path].size());
+            pthread_mutex_lock(info->loadedMutex);
+            (*info->sendingNow)[headers.path] = false;
+            pthread_mutex_unlock(info->loadedMutex);
             close(info->fd);
             return NULL;
         }
@@ -192,8 +199,6 @@ static void* workerBody(void* arg) {
     long int limit = CACHE_LIMIT;
 
 
-
-
     if (!sendData(server, request.c_str(), request.size())) {
         std::cout << "Can't send  request to target! Terminating!" << std::endl;
         close(info->fd);
@@ -225,7 +230,6 @@ static void* workerBody(void* arg) {
             return NULL;
         }
     } while (readed > 0);
-    close(server);
     ResponseParseStatus status = httpParseResponse(&response[0], response.size(), NULL);
 
     std::string serverError = "HTTP/1.1 523\r\n\r\n";
@@ -233,20 +237,60 @@ static void* workerBody(void* arg) {
     switch (status) {
         case OK:
             pthread_mutex_lock(info->loadedMutex);
-            std::cout << "sen cache for " << headers.path << " as ready" << std::endl;
-            (*info->cacheLoaded)[headers.path] = true;
-            (*info->cache)[headers.path].swap(response);
-            pthread_cond_broadcast(info->cv);
-            pthread_mutex_unlock(info->loadedMutex);
-            break;
+            std::cout << "ok status " << headers.path << " as ready" << std::endl;
+            if (currentCacheSize + response.size() < CACHE_LIMIT) {
+                (*info->cacheLoaded)[headers.path] = true;
+                currentCacheSize += response.size();
+                (*info->cache)[headers.path].swap(response);
+                pthread_cond_broadcast(info->cv);
+                pthread_mutex_unlock(info->loadedMutex);
+                close(server);
+                break;
+            } else {
+                while (currentCacheSize + response.size() > CACHE_LIMIT) {
+                    std::cout <<"AAAA " <<currentCacheSize<<std::endl;
+                    if ((*info->cache).empty()) {
+                        straight(info->fd,server,response);
+                        (*info->cacheLoaded).erase(headers.path);
+                        close(server);
+                        close(info->fd);
+                        pthread_mutex_unlock(info->loadedMutex);
+                        std::cout<< "FROM STRAIGHT" << currentCacheSize<<std::endl;
+                        return NULL;
+                    }
+                    for (std::map<std::string, std::vector<char> >::iterator it = (*info->cache).begin();
+                         it != (*info->cache).end();) {
+                        std::cout <<"CCC " << it->first<<std::endl;
+                        if (!(*info->sendingNow)[it->first]) {
+                            currentCacheSize -= (*info->cache)[it->first].size();
+                            std::cout <<"BBB " << it->first<<std::endl;
+                            (*info->sendingNow).erase(it->first);
+                            (*info->cacheLoaded).erase(it->first);
+                            (*info->cache).erase(it++);
+                        } else
+                            it++;
+                    }
+                }
+                (*info->cacheLoaded)[headers.path] = true;
+                currentCacheSize += response.size();
+                (*info->cache)[headers.path].swap(response);
+                pthread_cond_broadcast(info->cv);
+                pthread_mutex_unlock(info->loadedMutex);
+                close(server);
+                break;
+            }
+
+
         case Error: {
             std::cout << "CACHE ERASED" << std::endl;
             pthread_mutex_lock(info->loadedMutex);
+            currentCacheSize -= (*info->cache)[headers.path].size();
             info->cacheLoaded->erase(headers.path);
             pthread_cond_broadcast(info->cv);
             pthread_mutex_unlock(info->loadedMutex);
             sendData(info->fd, serverError.c_str(), serverError.size());
             close(info->fd);
+            close(server);
             return NULL;
         }
         default:
@@ -258,10 +302,12 @@ static void* workerBody(void* arg) {
             pthread_mutex_unlock(info->loadedMutex);
             sendData(info->fd, &response[0], response.size());
             close(info->fd);
+            close(server);
             return NULL;
     }
     sendData(info->fd, &(*info->cache)[headers.path].front(), (*info->cache)[headers.path].size());
     close(info->fd);
+    std::cout << "CURRENT CACHE SIZE "<< currentCacheSize <<std::endl;
     return NULL;
 }
 
@@ -282,6 +328,7 @@ void MultyThreadedCacheProxy::startWorking() {
         info.cacheLoaded = &cacheLoaded;
         info.cache = &cache;
         info.fd = client;
+        info.sendingNow = &sendingRightNow;
         infos.push_back(info);
         if (pthread_create(&thread, NULL, workerBody, &*(infos.end() - 1))) {
             std::cerr << "CAN' T CREATE THREAD " << std::endl;

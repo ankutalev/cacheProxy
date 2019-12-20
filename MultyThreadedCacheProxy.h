@@ -25,6 +25,7 @@ private:
 
     sockaddr_in serverAddr;
     std::map<std::string, std::vector<char> > cache;
+    std::map<std::string, bool> sendingRightNow;
     std::map<std::string, bool> cacheLoaded;
     pthread_mutex_t loadedMutex;
     pthread_cond_t cv;
